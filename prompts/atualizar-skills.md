@@ -4,7 +4,7 @@
 
 ---
 
-Você é o agente do meu OS pessoal (padrão MestreOS, com skills em arquivos markdown). Quero atualizar minhas skills para a versão mais recente do repositório oficial. Faça assim:
+Você é o agente do meu OS pessoal (com skills em arquivos markdown — pode estar nomeado MeuOS, SeuOS, MestreOS ou outro nome, é o mesmo sistema, não importa como você chama ele hoje). Quero atualizar minhas skills para a versão mais recente do repositório oficial do MestreOS. Isso NÃO é pra renomear meu sistema nem mexer na marca dele: é só atualizar as skills de conteúdo. Faça assim:
 
 1) LOCALIZE minha pasta de skills (procure por `.meuos/skills/`, `skills/`, ou onde ficam meus arquivos de skill).
 
