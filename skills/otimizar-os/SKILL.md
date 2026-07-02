@@ -20,7 +20,7 @@ Esta skill analisa os arquivos de documentacao de um contexto do seu OS (a raiz,
 
 ## Estrutura de arquivos do OS (o que o instalador cria)
 
-Este e o layout padrao que o instalador Mestre OS monta. A skill trabalha em cima dele:
+Este e o layout padrao que o instalador MestreOS monta. A skill trabalha em cima dele:
 
 - **Raiz do OS:** `claude.md` (regras globais), `soul.md` (personalidade e tom do agente), `index.md` (catalogo geral que aponta para os contextos)
 - **Cada contexto** (pasta): `claude.md` (regras do contexto), `documento_mestre.md` (escopo, status e pendencias), `aprendizados_do_dia.md`, `changelog.md`, `index.md` (catalogo do contexto)

@@ -1,6 +1,6 @@
-# Mestre OS — Skills oficiais
+# MestreOS — Skills oficiais
 
-Skills do **Mestre OS**: o sistema operacional pessoal que transforma o seu agente de IA (Claude Code e similares) num parceiro que conhece você, seus projetos e suas regras. Este repositório é a fonte oficial das skills. Cada atualização chega aqui primeiro, versionada.
+Skills do **MestreOS**: o sistema operacional pessoal que transforma o seu agente de IA (Claude Code e similares) num parceiro que conhece você, seus projetos e suas regras. Este repositório é a fonte oficial das skills. Cada atualização chega aqui primeiro, versionada.
 
 Por **Paulo Penna** (conceito original de Fernando Lúcio).
 
@@ -15,11 +15,11 @@ Por **Paulo Penna** (conceito original de Fernando Lúcio).
 
 ## Como instalar
 
-Você recebeu (ou vai receber) o **instalador do Mestre OS** (`instalador-mestre-os.md`): um arquivo único que monta o OS completo na sua máquina, com estas skills já embutidas. O manual em PDF ensina o passo a passo desde a instalação do Claude.
+Você recebeu (ou vai receber) o **instalador do MestreOS** (`instalador-mestre-os.md`): um arquivo único que monta o OS completo na sua máquina, com estas skills já embutidas. O manual em PDF ensina o passo a passo desde a instalação do Claude.
 
 ## Como atualizar
 
-Quando sair melhoria, o aviso chega no grupo do Mestre OS com um prompt pronto: é colar no seu Claude e ele atualiza sozinho. O prompt oficial de atualização está em [prompts/atualizar-skills.md](prompts/atualizar-skills.md).
+Quando sair melhoria, o aviso chega no grupo do MestreOS com um prompt pronto: é colar no seu Claude e ele atualiza sozinho. O prompt oficial de atualização está em [prompts/atualizar-skills.md](prompts/atualizar-skills.md).
 
 Cada skill tem o campo `version:` no frontmatter. Seu agente compara a versão instalada com a deste repositório e só substitui o que estiver desatualizado.
 

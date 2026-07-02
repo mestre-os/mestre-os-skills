@@ -1,8 +1,8 @@
-# Changelog — Mestre OS Skills
+# Changelog — MestreOS Skills
 
 ## v1.0 — 02/07/2026
 
-Lançamento do repositório oficial, junto com o Mestre OS v3.0 (manual + instalador novos).
+Lançamento do repositório oficial, junto com o MestreOS v3.0 (manual + instalador novos).
 
 - **salvar 1.0**: nova skill que funde "conferir entrega" + "fim do dia" num checkpoint que roda a qualquer hora. Orientação principal: siga o semáforo do anel de contexto do Claude Code (🟡 rode a salvar · 🔴 rode, feche a sessão e abra nova). Você faz a sua própria compactação em vez de deixar o provedor compactar às cegas.
 - **ligar-loop 1.0**: nova skill que funde "engenharia de loop" + "loop autônomo". Dois tempos: Plano de Loop aprovado por você, depois execução com travas.

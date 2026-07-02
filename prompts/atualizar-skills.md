@@ -1,18 +1,18 @@
-# Prompt oficial de atualização — Mestre OS
+# Prompt oficial de atualização — MestreOS
 
 > Copie tudo abaixo da linha e cole no seu Claude (ou agente equivalente). Ele atualiza suas skills sozinho.
 
 ---
 
-Você é o agente do meu OS pessoal (padrão Mestre OS, com skills em arquivos markdown). Quero atualizar minhas skills para a versão mais recente do repositório oficial. Faça assim:
+Você é o agente do meu OS pessoal (padrão MestreOS, com skills em arquivos markdown). Quero atualizar minhas skills para a versão mais recente do repositório oficial. Faça assim:
 
 1) LOCALIZE minha pasta de skills (procure por `.meuos/skills/`, `skills/`, ou onde ficam meus arquivos de skill).
 
 2) BAIXE o conteúdo destes links (raw do GitHub) e compare com o que tenho instalado:
-- Salvar: https://raw.githubusercontent.com/{CONTA}/mestre-os-skills/main/skills/salvar/SKILL.md
-- Ligar Loop: https://raw.githubusercontent.com/{CONTA}/mestre-os-skills/main/skills/ligar-loop/SKILL.md
-- Otimizar OS: https://raw.githubusercontent.com/{CONTA}/mestre-os-skills/main/skills/otimizar-os/SKILL.md
-- Otimizar Custo: https://raw.githubusercontent.com/{CONTA}/mestre-os-skills/main/skills/otimizar-custo/SKILL.md
+- Salvar: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/salvar/SKILL.md
+- Ligar Loop: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/ligar-loop/SKILL.md
+- Otimizar OS: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/otimizar-os/SKILL.md
+- Otimizar Custo: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/otimizar-custo/SKILL.md
 
 3) Para cada skill: se eu não tiver, crie. Se eu tiver versão mais antiga (campo `version:` no frontmatter), substitua preservando qualquer personalização minha que não conflite (me mostre antes o que vai mudar).
 
