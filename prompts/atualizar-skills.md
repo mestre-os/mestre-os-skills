@@ -13,6 +13,7 @@ Você é o agente do meu OS pessoal (com skills em arquivos markdown — pode es
 - Ligar Loop: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/ligar-loop/SKILL.md
 - Otimizar OS: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/otimizar-os/SKILL.md
 - Otimizar Custo: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/otimizar-custo/SKILL.md
+- Me Faça Perguntas: https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/skills/me-faca-perguntas/SKILL.md
 
 3) Para cada skill: se eu não tiver, crie. Se eu tiver versão mais antiga (campo `version:` no frontmatter), substitua preservando qualquer personalização minha que não conflite (me mostre antes o que vai mudar).
 

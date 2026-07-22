@@ -1,5 +1,9 @@
 # Changelog — MestreOS Skills
 
+## v1.1 — 22/07/2026
+
+- **me-faca-perguntas 1.0**: skill nova. Antes de construir qualquer coisa (app, feature, decisão, documento), a IA vira um entrevistador rigoroso: uma pergunta por vez, repergunta quando a resposta vem vaga, caça suposições escondidas, contradições e casos de borda, e desafia o escopo ("existe caminho mais simples?"). "Não sei" vale como resposta: ela apresenta 2-3 opções com prós e contras. A entrevista termina numa síntese com decisões tomadas, pontos em aberto, próximo passo e critério de pronto verificável.
+
 ## v1.0 — 02/07/2026
 
 Lançamento do repositório oficial, junto com o MestreOS v3.0 (manual + instalador novos).
