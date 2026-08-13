@@ -11,7 +11,7 @@ description: |
   R$/mes no relatorio final. Executa quando o usuario diz "otimizar custo", "reduzir custo",
   "economizar tokens", "otimizar memoria", "limpar memoria", "memoria ta cara", "higienizar
   memoria", "memoria do claude", "revisar memoria", "auditar memoria".
-version: 1.0
+version: 1.1
 user-invocable: true
 argument-hint: "(sem argumentos: roda na pasta do seu Claude Code atual)"
 ---
@@ -50,8 +50,8 @@ no custo fixo de cada sessao.
 
 ## Quando usar
 
-- Quando a sua rotina de revisao diaria alertar que a memoria esta grande
-- Uma vez por mes como higiene preventiva
+- **Quando a `otimizar-os` sugerir ao terminar uma execucao.** Esse e o canal unico do lembrete, no maximo 1x por mes. A `salvar` roda todo dia e por isso apenas observa: ela nunca sugere esta skill, senao viraria alarme diario
+- Cadencia na pratica: o lembrete e mensal, mas quem decide se ha trabalho e o gate de "nada a fazer" logo no inicio. Memoria saudavel = a proxima execucao de verdade fica pra uns 90 dias
 - Quando sentir que o Claude Code esta lento ou confuso com coisas antigas
 - Quando o usuario disser "otimizar memoria", "limpar memoria do claude", "memoria ta cara", "auditar memoria"
 
@@ -347,11 +347,14 @@ indicando a origem: "Promovido da memoria em DD/MM"
 
 ---
 
-## Integracao com outras skills
+## Integracao com outras skills (a corrente: salvar → otimizar-os → esta skill)
 
-- **Revisao Diaria** — detecta quando a memoria esta grande e sugere rodar esta skill
-- **Otimizar OS** — foca nos arquivos do seu OS (Drive/pasta local), nao toca na memoria do Claude Code
-- **Esta skill (`otimizar-custo`)** — foca exclusivamente na memoria do Claude Code
+As tres tem ritmos diferentes de proposito, e cada uma so cobra a seguinte. Assim voce recebe um lembrete quando ele importa, em vez de tres avisos por dia que voce aprende a ignorar.
 
-As tres juntas cobrem: encerramento do dia, organizacao dos docs do OS e higiene da memoria do
-agente. Rodar cada uma no momento certo mantem seu sistema enxuto e barato de operar.
+| Skill | Ritmo | Papel | Sobre a memoria |
+|---|---|---|---|
+| **`salvar`** | a qualquer hora, varias vezes ao dia | checkpoint, captura com gate de escrita e higiene leve | apenas OBSERVA (1 linha se estiver pesada). Nunca sugere esta skill |
+| **`otimizar-os`** | semanal, quando o volume pedir | organiza os arquivos do seu OS | e QUEM lembra desta skill, no maximo 1x por mes |
+| **`otimizar-custo`** (esta) | mensal sob lembrete, ~90 dias se estiver saudavel | exclusivamente a memoria do agente | e o destino do lembrete |
+
+Rodar cada uma no seu momento mantem o sistema enxuto e barato de operar, sem transformar manutencao em ocupacao.

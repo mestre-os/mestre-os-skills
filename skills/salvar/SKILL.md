@@ -5,6 +5,7 @@ description: |
   precisar, quando a janela de contexto aperta (por volta do amarelo / 80%)
   ou quando o trabalho merece ser preservado. Sem saudacao, sem "boa noite",
   sem juizo de horario. Confere o que foi entregue (com evidencia), sintetiza,
+  AVALIA os arquivos antes de escrever (gate anti-duplicacao e anti-verborragia)
   e grava um checkpoint duravel que reconstroi o estado mesmo que o provedor
   compacte a janela sozinho.
   Gatilhos: "salvar", "salva isso", "salva o contexto", "checkpoint",
@@ -12,7 +13,7 @@ description: |
   "fim do dia", "fechar o dia", "conferir entrega", "verificar entrega",
   "revisao diaria", "terminei", "pronto", "feito", "entregue", "finalizado",
   "ta pronto?".
-version: 1.0
+version: 1.1
 user-invocable: true
 ---
 
@@ -58,6 +59,25 @@ Alem do semaforo, tambem vale rodar:
 2. **Nao forcar conteudo.** Bloco vazio fica vazio. Nunca inventar aprendizado, pendencia ou verificacao so pra preencher.
 3. **Aprovacao antes de mover.** Nunca apagar ou migrar arquivo sem mostrar e perguntar.
 4. **Tom neutro.** Zero saudacao, zero "boa noite", zero juizo de horario. Fala "checkpoint salvo", "estado preservado".
+5. **Escrever e excecao, nao obrigacao.** A rotina AVALIA todos os arquivos, mas so ESCREVE onde sobrou item que passou no gate (PASSO 3.5). Sessao sem material para um arquivo = arquivo INTOCADO. Escrever "pra constar" e exatamente o que incha o OS.
+
+---
+
+## Contrato por arquivo (onde cada coisa mora) ⭐
+
+Metade do inchaco de um OS nao vem de escrever demais: vem de escrever no lugar errado. Antes de gravar qualquer coisa, o agente consulta esta tabela para decidir o destino.
+
+| Arquivo | O que entra | O que NUNCA entra |
+|---|---|---|
+| `claude.md` (do contexto) | So regra RIGIDA de operacao: limite inviolavel, configuracao fixa. Mexer aqui e a excecao da excecao | Caso do dia, status, decisao de negocio, historico |
+| `documento_mestre.md` | O documento VIVO: escopo, status, pendencias, decisoes estrategicas e taticas, planos, ponteiros para os satelites | Especificacao densa (vai pra satelite), historico (vai pro changelog), caso pontual |
+| `aprendizados_do_dia.md` | Regra, padrao ou anti-pattern REUTILIZAVEL, em texto curto e objetivo | Narrativa da investigacao, evento datado, caso que nao se repete |
+| `changelog.md` | O lar do caso pontual: o que foi feito, incidentes, narrativa com data (so acrescenta, nunca reescreve) | Regra viva, que mora nos arquivos acima |
+| `satelites/<topico>.md` | Conteudo denso de UM tema, lido so quando o tema aparece | Coisa consultada em toda sessao (essa vai pro mestre) |
+| `index.md` | Catalogo completo dos `.md` do contexto: link + 1 linha de descricao | Conteudo de verdade |
+| `soul.md` (raiz) | So carater, tom e papel do agente | Qualquer regra operacional |
+
+Regra pratica: **decisao sobe pro mestre, caso desce pro changelog, regra de tema vai pra gaveta (satelite).** O `claude.md` quase nunca e tocado.
 
 ---
 
@@ -185,9 +205,38 @@ Em contexto de projeto, espelhar um resumo de 2 a 3 linhas no topo do documento 
 
 ---
 
+### PASSO 3.5 — GATE DE ESCRITA (obrigatorio antes de gravar) ⭐
+
+Nenhum item confirmado no PASSO 2 vai direto para os arquivos. Cada um passa por este gate antes de qualquer edicao. O motivo e simples: **os arquivos incham na ENTRADA, por escrita repetida e prolixa.** Limpar depois custa muito mais caro do que filtrar na hora, e e por isso que existe uma skill inteira (`otimizar-os`) so pra consertar o estrago.
+
+Para cada item, na ordem:
+
+**1. Ler o arquivo-alvo INTEIRO.** Nao so o comeco, nao so o topo. Sem saber o que ja esta escrito ali, toda escrita nova e uma duplicata em potencial.
+
+**2. Buscar antes de escrever (anti-duplicacao).** Tirar 2 ou 3 palavras-chave do item e procurar no `documento_mestre.md`, no `aprendizados_do_dia.md`, no `claude.md` do contexto e nos satelites.
+- Tema **ja coberto** → EDITAR a entrada que existe (incorporar o novo, atualizar a data). Nunca criar uma segunda entrada do mesmo assunto.
+- O problema **aconteceu de novo** (reincidencia de uma regra ja escrita) → isso nao e aprendizado novo: 1 linha no changelog e, no maximo, 1 frase de reforco na regra existente.
+
+**3. Teste dos 3 meses (filtra o caso pontual).** Perguntar: *"daqui a 3 meses, isso muda como eu trabalho neste contexto?"*
+- **Nao** (bug corrigido, incidente resolvido, evento com data, historia de como voce chegou la) → vai pro **changelog**, 1 ou 2 bullets. Nada nos aprendizados.
+- **Sim** → extrair SO a regra generalizavel. A narrativa do caso vai pro changelog, nunca dentro da entrada.
+
+**4. Orcamento de escrita (anti-verborragia).**
+- Entrada nova: no maximo **6 linhas e ~700 caracteres**. Insight = a regra. Solucao = o procedimento. Nao fazer = 1 frase.
+- Proibido dentro da entrada: historico da investigacao, "caso real: ...", justificativa longa da regra.
+- No maximo **3 entradas novas por sessao**. O que passar disso e quase sempre caso pontual, e caso pontual vai pro changelog.
+
+**5. Teto duro (entra um, sai um).** Se o arquivo-alvo JA esta estourado (aprendizados acima de 250 linhas ou 15 KB · `claude.md` acima de 300 linhas · documento mestre acima de 500), a escrita nova so entra se sair volume equivalente na MESMA rodada. Condensar ou migrar primeiro, com aprovacao. Sem isso, o arquivo so cresce.
+
+**6. Destino conferido no contrato.** Bater o item contra a tabela "Contrato por arquivo" (no topo desta skill) antes de gravar. Decisao de negocio, estrategia, tatica ou plano vao pro **documento mestre**. O `claude.md` do contexto so recebe regra rigida de operacao, e isso e raro.
+
+**O que o gate produz:** a lista final do que sera gravado, ja com destino definido. Item que nao passou no gate nao some em silencio: ou virou 1 linha no changelog, ou foi incorporado a uma entrada existente. Reportar em 1 linha quantos itens entraram e quantos foram redirecionados.
+
+---
+
 ### PASSO 4 — PERSISTIR no OS (com aprovacao)
 
-Gravar so o que a sintese confirmou, nos arquivos do OS:
+Gravar so o que a sintese confirmou **e que passou no gate do PASSO 3.5**, nos arquivos do OS:
 
 1. **`aprendizados_do_dia.md`** — entradas novas no topo:
    ```markdown
@@ -206,8 +255,10 @@ Gravar so o que a sintese confirmou, nos arquivos do OS:
    ```
 
 3. **Documento mestre** — mover itens concluidos para o changelog (**sempre mostrando antes** de mover), adicionar pendencias novas, atualizar a data de "ultima atualizacao".
+   **Antes de adicionar pendencia nova, procurar nas que ja existem:** se o tema ja esta la, atualizar a linha existente em vez de criar uma segunda. Pendencia e 1 ou 2 linhas (o que e + o que ela destrava). Especificacao e historico nao moram aqui.
 
 4. **`index.md`** — atualizar se algum arquivo foi criado ou removido (no contexto e na raiz, se aplicavel).
+   **Meta: 100% dos `.md` do contexto listados, sem excecao.** Antes de fechar, cruzar a lista de arquivos da pasta com o que esta no index. Satelite que ficou de fora do index e documento invisivel: daqui a um mes ninguem lembra que ele existe e alguem escreve tudo de novo em outro lugar. Faltou entrada? Adicionar na hora, sem perguntar (index e catalogo, nao e conteudo).
 
 Tudo isso **com aprovacao**: mostrar o que vai gravar e esperar o ok.
 
@@ -229,8 +280,11 @@ Dar uma olhada rapida no tamanho dos arquivos do contexto ativo (so o ativo), co
 | Arquivo | 🟢 OK | 🟡 Atencao | 🔴 Grande |
 |---------|-------|-----------|----------|
 | documento mestre | < 300 linhas | 300 a 500 | > 500 |
-| `aprendizados_do_dia.md` | < 200 linhas | 200 a 250 | > 250 |
+| `aprendizados_do_dia.md` | < 200 linhas E < 15 KB | 200 a 250 linhas ou 15 KB | > 250 linhas OU > 15 KB |
 | `changelog.md` | < 30 KB | 30 a 50 KB | > 50 KB |
+| Por entrada (aprendizados) | ate 6 linhas | 6 a 8 linhas | > 8 linhas ou ~700 caracteres |
+
+**Medir linhas E KB, nunca so linhas.** Um arquivo de paragrafos longos passa folgado no check de linhas e estoura no de tamanho: sao 150 linhas que custam o mesmo que 400. Se as duas medidas discordam, vale a pior.
 
 Se algo ficou 🔴, **sugerir** uma limpeza ou reorganizacao. **Nao executar, so sugerir.**
 
@@ -239,6 +293,8 @@ Se algo ficou 🔴, **sugerir** uma limpeza ou reorganizacao. **Nao executar, so
 - Se o arquivo esta grande porque e **conteudo perene, necessario e ja curado** (o piso, o minimo que precisa existir): **nao sugerir nada.** Repetir um alarme sem acao possivel e so ruido.
 
 **Caso especifico:** se o `aprendizados_do_dia.md` ficou grande por acumulo de **regra permanente** (muitos "sempre" e "nunca" fixos), e nao por registro temporal, a acao certa NAO e migrar para o changelog. E extrair essas regras para um satelite (`satelites/<topico>.md`, lido so quando o tema surge) e deixar o `aprendizados` como um log curto.
+
+**Sobre a memoria do agente: observar, nunca cobrar.** Se a memoria persistente estiver visivelmente pesada, registrar no maximo 1 linha no relatorio ("memoria do agente esta grande"). **Nao sugerir a skill `otimizar-custo` aqui.** Esta skill roda todo dia, varias vezes por dia; se ela cobrasse limpeza de memoria toda vez, viraria alarme diario e voce pararia de ler. Quem faz esse lembrete, no maximo 1x por mes, e a `otimizar-os`.
 
 ---
 
@@ -250,8 +306,10 @@ Checkpoint salvo ✓
 Contexto: [caminho]
 Checkpoint: .remember/CHECKPOINT.md (ou checkpoints/CHECKPOINT.md)
 Conferido: [N itens / "n/a — sessao de conversa"]
+Gate de escrita: [N itens entraram · N redirecionados pro changelog · N incorporados a entrada existente]
 Aprendizados: [N entradas]
 Migrado pro changelog: [N itens]
+Index: [completo / N entradas adicionadas]
 Saude: [ok / X arquivos 🔴]
 
 Como retomar: [a linha "Como retomar" do checkpoint]
@@ -270,6 +328,8 @@ Como retomar: [a linha "Como retomar" do checkpoint]
 - **Nunca misturar contextos:** `salvar` toca so o contexto ativo.
 - **Nunca dar boa-noite nem julgar o horario:** a skill roda a qualquer hora.
 - **Nunca escrever no `soul.md` nem promover regra operacional para ele.** O `soul.md` guarda so o carater, o tom e o papel do agente, e deve ficar leve. Regra operacional (uma taxa, um fluxo, um "sempre faca X") vai para o documento mestre ou para um satelite. Se algo parecer de `soul.md`, perguntar antes: nunca escrever por conta propria.
+- **Nunca escrever sem passar pelo gate (PASSO 3.5):** ler o arquivo inteiro, buscar duplicata e conferir o destino vem ANTES de qualquer edicao. Gravar direto e o que transforma um OS bom em um OS gordo.
+- **Nunca escrever "pra constar":** arquivo sem material novo fica intocado.
 - **O PASSO 3 (checkpoint) roda sempre:** e a razao de existir da skill.
 - **Nunca rodar sozinha:** o gatilho e 100% manual. O agente pode sugerir quando notar o contexto pesado, mas nunca executa por conta propria.
 

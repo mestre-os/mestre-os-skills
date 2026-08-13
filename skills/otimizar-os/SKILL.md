@@ -6,7 +6,8 @@ description: |
   "organizar arquivos", "arquivos grandes", "compactar docs", "higienizar", "limpar documentos",
   "reduzir arquivos", "arquivos crescendo", "limpar terreno", "organizar contexto".
   Analisa, propoe um plano e executa somente com aprovacao do usuario.
-version: 1.0
+  Tambem confere a integridade dos links entre documentos (link quebrado, arquivo orfao).
+version: 1.1
 user-invocable: true
 ---
 
@@ -157,7 +158,7 @@ CLIENTEA/OUTRO-PROJETO
 | `claude.md` | menos de 200 linhas | 200 a 300 | mais de 300 |
 | Arquivos secundarios (ex: satelites) | menos de 25KB | 25 a 40KB | mais de 40KB |
 | `changelog.md` | menos de 30KB | 30 a 50KB | mais de 50KB |
-| `aprendizados_do_dia.md` | menos de 200 linhas | 200 a 250 | mais de 250 |
+| `aprendizados_do_dia.md` | menos de 200 linhas E de 15KB | 200 a 250 linhas ou 15KB | mais de 250 linhas OU mais de 15KB |
 | `index.md` | menos de 100 linhas | 100 a 150 | mais de 150 |
 | Outros arquivos `.md` | menos de 20KB | 20 a 35KB | mais de 35KB |
 
@@ -184,7 +185,7 @@ Antes de olhar a idade do conteudo, o agente classifica cada bloco pelo seu TIPO
 | Tipo | Exemplos | O que acontece |
 |------|----------|----------------|
 | **Permanente** | Regras do seu negocio, padroes de trabalho, convencoes, "nunca fazer X", configuracoes ativas | **Fica onde esta** — nao importa a idade |
-| **Promovivel** | Regra que voce usa em toda sessao e deveria estar no documento mestre | **Sobe para o documento_mestre.md** — fica mais visivel e permanente (ver 2d) |
+| **Promovivel** | Conteudo perene que merece subir de lugar: decisao de negocio, regra rigida de operacao ou regra tecnica de um tema | **Promover para o destino certo** (sao 3 destinos diferentes, ver 2d) |
 | **Temporario** | Entregas concluidas, bugs corrigidos, decisoes pontuais, status updates datados | Compacta conforme a idade (ver abaixo) |
 | **Ultrapassado** | Status que nao vale mais, pesquisa ja usada, decisao substituida por outra mais recente | **Vai para o historico** ou changelog |
 
@@ -220,12 +221,15 @@ Identificar:
 - Secoes sobre decisoes que foram substituidas por decisoes mais recentes
 - Status desatualizados (ex: "aguardando X" sendo que X ja aconteceu)
 
-**2d. Regras que merecem promocao — DOIS destinos por frequencia de uso**
+**2d. Conteudo que merece promocao — TRES destinos, por natureza e frequencia**
 
-Algumas regras nos seus aprendizados sao tao importantes que deveriam sair de la e virar permanentes. O destino depende de com que frequencia a regra e usada:
+Algumas entradas nos seus aprendizados nao sao aprendizados datados: sao regras ou decisoes perenes. Elas nao deveriam ficar num arquivo rolante. Mas "sair dos aprendizados" nao significa "ir todo mundo pro mesmo lugar": o destino depende do QUE o item e e de COM QUE FREQUENCIA ele e consultado.
 
-- **Regra usada em TODA sessao** → sobe pro `documento_mestre.md` (ja carrega sempre; custo marginal zero)
-- **Regra usada so quando UM tema aparece** → satelite lido sob demanda em `<contexto>/satelites/<topico>.md` + ponteiro de 1 linha no mestre
+| O item e... | Destino | Por que |
+|---|---|---|
+| **Decisao de negocio, estrategia ou plano** consultado sempre (modelo de preco, posicionamento, escopo) | `documento_mestre.md` | o mestre ja carrega em toda sessao e e onde decisao mora; e o documento vivo |
+| **Regra RIGIDA de operacao** do contexto (limite inviolavel, tipo "nunca cruzar dados deste cliente") | `claude.md` do contexto | e a lei de COMO se trabalha ali. Mexer no claude.md e a excecao da excecao, quase nunca acontece |
+| **Regra de UM tema especifico** (tabela de taxas, regra de um modulo, detalhe de integracao) | satelite em `<contexto>/satelites/<topico>.md` + ponteiro de 1 linha no mestre | tira o peso da sessao; o agente abre o satelite so quando o assunto aparece |
 
 **Analogia mesa/gaveta:** o mestre e a mesa (tudo ali carrega em toda sessao — promover regra de tema pra mesa nao reduz o imposto fixo, so muda de bolso); o satelite e a gaveta (lido so quando o tema surge — mover pra gaveta reduz de verdade).
 
@@ -242,6 +246,27 @@ O agente identifica essas regras e pergunta:
 
 A skill `salvar` cria linhas de referencia ao migrar tarefas (`~~[x] tarefa~~ → ver changelog [data]`). Elas se acumulam no mestre, que carrega em TODA sessao. A partir de ~15 dessas linhas-fantasma, propor colapsar todas em UM unico ponteiro:
 > `**Tarefas concluidas:** historico completo no changelog.`
+
+**2f. Frontmatter de manutencao (a ficha de identificacao do arquivo)** ⭐
+
+Frontmatter e um bloco curto de metadados no TOPO do arquivo, entre duas linhas `---`. Ele faz pelo documento o que uma ficha de identificacao faz por uma pasta num arquivo fisico: o agente le a ficha e ja sabe o que e aquilo, de quando e, e se ainda vale, sem precisar ler o documento inteiro pra descobrir.
+
+Padrao minimo para os documentos vivos do contexto:
+
+```yaml
+---
+updated: AAAA-MM-DD    # data da ultima edicao relevante
+context: NomeDoContexto
+type: mestre | claude | satelite | changelog | aprendizados | index
+status: vivo | congelado | arquivado
+---
+```
+
+**Como esta skill usa o frontmatter:**
+- **Lendo:** quando ele existe, a manutencao deixa de ser adivinhacao. O scan usa `updated` pra saber a idade de verdade (e nao chutar pela data escrita no meio do texto), a classificacao do PASSO 2 usa `type` e `status` em vez de deduzir pelo conteudo, e a caca de orfaos pula quem esta com `status: arquivado`.
+- **Escrevendo (regra do escoteiro):** ao editar um documento por qualquer motivo, propor colocar ou atualizar o frontmatter DELE no mesmo lote de aprovacao. **Nunca fazer migracao em massa** so pra carimbar frontmatter em tudo: e mexida enorme por um ganho que so aparece depois. A cobertura cresce sozinha, arquivo por arquivo.
+- **Onde vale mais:** nos satelites e nos documentos lidos sob demanda. Nos arquivos que carregam em TODA sessao (`claude.md`, mestre, aprendizados), so vale se o ganho compensar as ~5 linhas a mais de custo fixo.
+- **Sem duplicata:** `updated` passa a ser o unico carimbo de edicao. Se o arquivo ganhou frontmatter, apagar a linha solta "Ultima atualizacao: ..." do corpo do texto, senao viram duas datas que discordam entre si.
 
 ---
 
@@ -338,38 +363,48 @@ Isso mantem a navegacao clara nos dois sentidos.
 2. Mover arquivo para `[path]/historico/nome_original.md`
 3. Se for o changelog: quando passar do limite (50KB), **quebrar por data** — mover as entradas antigas para arquivos datados em `historico/` (ex: `historico/changelog_2026_Q1.md` por trimestre, ou `historico/changelog_2026-06.md` por mes se muito ativo), mantendo no changelog vivo so as entradas recentes + o cabecalho. Cada arquivo datado e um pedaco fechado daquele periodo.
 
-**4d. Caca de MDs orfaos (SEMPRE executar)**
+**4d. Integridade referencial: links quebrados e arquivos orfaos (SEMPRE executar)** ⭐
 
-**O que e um MD orfao:** arquivo `.md` que existe fisicamente em alguma subpasta do contexto mas **nao tem ponteiro** no `index.md` daquela pasta nem e mencionado no `documento_mestre.md` do contexto. Sem ponteiro, o agente futuro nao sabe que aquele arquivo existe — conhecimento se perde silenciosamente.
+Um OS nao se degrada so por inchar. Ele se degrada por **perder as ligacoes entre os documentos**: o arquivo continua la, mas ninguem mais chega nele. Esta checagem cobre TODOS os `.md` do contexto, porque qualquer documento pode apontar para qualquer outro, nao so o `index.md` e o mestre.
+
+Sao tres defeitos diferentes:
+
+| Defeito | O que e | Por que acontece |
+|---|---|---|
+| **Link quebrado** | Um link `[texto](arquivo.md)` ou `[[wikilink]]` cujo alvo nao existe mais no disco | Renomear ou mover um arquivo NAO atualiza quem apontava pra ele. Todos os links quebram em silencio e ninguem descobre ate um agente seguir o ponteiro morto |
+| **Orfao de indice** | O `.md` existe no disco (normalmente escondido numa subpasta) mas nao e citado no `index.md`, nem no mestre, nem no `claude.md` do contexto | Arquivo criado no meio de uma sessao e nunca catalogado. O agente futuro nao sabe que ele existe e o conhecimento se perde |
+| **Orfao total** | NENHUM outro documento do contexto referencia esse arquivo (zero links de entrada) | E o sinal mais forte de sobra de sessao antiga. Principal candidato a `historico/` |
 
 **Procedimento:**
 
-1. Listar TODOS os `.md` do contexto escolhido (recursivo, ignorando `historico/`, `tmp/`, `node_modules/`, `.git/`)
+1. Listar TODOS os `.md` do contexto escolhido (recursivo, ignorando `historico/`, `tmp/`, `node_modules/`, `.git/`).
 
-2. Para cada arquivo, verificar se ha referencia a ele em:
-   - `index.md` da propria pasta
-   - `index.md` de pastas-pai dentro do contexto
-   - `documento_mestre.md` do contexto
-   - `claude.md` do contexto (se houver)
+2. **Varrer os links de saida:** em cada `.md`, extrair os links markdown `[texto](alvo.md)` e os wikilinks `[[nome]]`, resolver cada alvo no disco e anotar os que nao existem. Esses sao os links quebrados.
 
-3. Para arquivos **sem nenhuma referencia** (orfaos), apresentar tabela ao usuario:
+3. **Contar os links de entrada:** para cada arquivo, contar quantos documentos do contexto apontam pra ele. Zero referencias em qualquer lugar = orfao total. Sem referencia no `index.md` / mestre / `claude.md`, mas citado por outro documento = orfao de indice.
+
+4. Apresentar a tabela unica ao usuario:
 
 ```
-| # | Arquivo orfao | Localizacao | Sugestao |
-|---|---------------|-------------|----------|
-| O1 | analise_concorrentes.md | ClienteA/meu-projeto/docs/ | Adicionar ponteiro no index.md (categoria Analises) |
-| O2 | tech_integracao_nova.md | ClienteA/meu-projeto/tech/ | Mencionar no mestre secao Integracoes + ponteiro no index |
-| O3 | rascunho_velho.md | ClienteA/meu-projeto/tmp_old/ | Mover para historico/ (arquivo antigo) |
+| # | Achado | Arquivo | Detalhe | Sugestao |
+|---|--------|---------|---------|----------|
+| L1 | Link quebrado | ClienteA/meu-projeto/documento_mestre.md | aponta pra satelites/tech_api.md (nao existe) | Apontar pro nome novo: satelites/tech_api_v2.md |
+| L2 | Link quebrado | ClienteA/meu-projeto/index.md | [[pesquisa_antiga]] sem alvo | Remover a entrada (arquivo foi arquivado) |
+| O1 | Orfao de indice | ClienteA/meu-projeto/docs/analise_concorrentes.md | citado no mestre, fora do index | Adicionar ponteiro no index.md |
+| O2 | Orfao total | ClienteA/meu-projeto/tmp_old/rascunho_velho.md | zero links de entrada | Mover para historico/ |
 ```
 
-4. Aguardar aprovacao do usuario item-a-item ou em lote ("todos os ponteiros sim, O3 arquivar").
+5. Aguardar aprovacao item-a-item ou em lote ("todos os links sim, O2 arquivar").
 
-5. Executar aprovados:
-   - **Adicionar entrada no index.md** da pasta correspondente: `- [NOME](caminho) — descricao one-liner`
-   - **Mencionar inline no mestre** com ponteiro (se for satelite relevante para o contexto)
-   - **Mover para historico/** (se for obsoleto)
+6. Executar os aprovados:
+   - **Consertar o link:** se o alvo foi renomeado, apontar pro nome novo. Se foi arquivado de verdade, remover a entrada.
+   - **Adicionar entrada no `index.md`** da pasta correspondente: `- [NOME](caminho) — descricao em uma linha`
+   - **Mencionar no mestre** com ponteiro, se for satelite relevante pro contexto
+   - **Mover para `historico/`**, se for obsoleto
 
-**REGRA — nunca decidir sozinho:** o agente nunca decide se um orfao e relevante ou obsoleto. Sempre apresentar a tabela e aguardar a resposta do usuario.
+**Re-check obrigatorio no fim da execucao.** Se ESTA skill renomeou, moveu, dividiu ou arquivou algum arquivo (passos 4b e 4c), ela mesma acabou de criar links quebrados. Antes de encerrar, rodar de novo a varredura de links nos arquivos que apontavam pros arquivos tocados e consertar. O conserto nao acontece sozinho, e uma otimizacao que quebra a navegacao do OS deixou o sistema pior do que achou.
+
+**REGRA — nunca decidir sozinho:** o agente conserta link quebrado sem perguntar (e correcao mecanica, o alvo certo e obvio), mas **nunca** decide sozinho se um arquivo orfao e relevante ou lixo. Orfao sempre vai pra tabela e espera resposta.
 
 **4e. Confirmar cada alteracao**
 Antes de salvar qualquer mudanca em arquivo existente, mostrar o antes e depois:
@@ -409,11 +444,19 @@ Status atual:
 - ClienteA/meu-projeto/changelog.md: 🟢 ok
 - ClienteA/meu-projeto/aprendizados_do_dia.md: 🟢 ok
 
+Integridade: [N links quebrados corrigidos · N orfaos catalogados · N arquivados]
+Frontmatter: [N arquivos ganharam ficha nesta rodada]
+
 Custo fixo da sessao: ~Xk → ~Yk tokens.
 ```
 
 Se ainda houver arquivos 🟡 ou 🔴 restantes (itens nao aprovados), indicar claramente:
 > `"Ainda ha X arquivos acima do limite ideal. Posso organiza-los numa proxima execucao quando quiser."`
+
+**Lembrete da higiene de memoria (no maximo 1x por mes).** Esta skill cuida dos ARQUIVOS do seu OS; a memoria do agente e outra coisa e tem skill propria (`otimizar-custo`). Ao concluir, se fizer mais de um mes desde a ultima passada na memoria, fechar com uma linha:
+> `"De olho tambem na memoria do agente: faz mais de um mes desde a ultima limpeza. Quando quiser, e so falar 'otimizar custo'."`
+
+**Esta skill e o unico canal desse lembrete.** A `salvar` roda todo dia e, se ela tambem cobrasse, viraria alarme diario e voce ia parar de ler. A `salvar` no maximo observa, sem sugerir.
 
 ---
 

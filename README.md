@@ -8,10 +8,10 @@ Por **Paulo Penna** (conceito original de Fernando Lúcio).
 
 | Skill | O que faz | Versão |
 |---|---|---|
-| [salvar](skills/salvar/SKILL.md) | Checkpoint de soberania de contexto: confere a entrega, sintetiza a sessão e grava um checkpoint durável no SEU formato. Rode quando o anel de contexto ficar amarelo (🟡) e sempre antes de fechar uma sessão cheia (🔴). Funde as antigas "conferir entrega" e "fim do dia". | 1.0 |
+| [salvar](skills/salvar/SKILL.md) | Checkpoint de soberania de contexto: confere a entrega, sintetiza a sessão e grava um checkpoint durável no SEU formato. Rode quando o anel de contexto ficar amarelo (🟡) e sempre antes de fechar uma sessão cheia (🔴). Agora avalia os arquivos antes de escrever, com gate anti-duplicação e anti-verborragia. Funde as antigas "conferir entrega" e "fim do dia". | 1.1 |
 | [ligar-loop](skills/ligar-loop/SKILL.md) | Engenharia de loop em dois tempos: desenha o Plano de Loop, você aprova, e liga o trabalho autônomo com travas de segurança (critério de parada, teto de iterações, rollback). Funde as antigas "engenharia de loop" e "loop autônomo". | 1.0 |
-| [otimizar-os](skills/otimizar-os/SKILL.md) | Organiza e compacta os arquivos do OS. Mostra o custo fixo por sessão em tokens e para quando não há mais nada útil a reduzir. | 1.0 |
-| [otimizar-custo](skills/otimizar-custo/SKILL.md) | Higiene da memória persistente do agente. Mede linhas E caracteres, enxuga o índice e funde tópicos irmãos, sempre com aprovação. | 1.0 |
+| [otimizar-os](skills/otimizar-os/SKILL.md) | Organiza e compacta os arquivos do OS. Mostra o custo fixo por sessão em tokens e para quando não há mais nada útil a reduzir. Agora também confere a integridade dos links entre documentos (link quebrado, arquivo órfão). | 1.1 |
+| [otimizar-custo](skills/otimizar-custo/SKILL.md) | Higiene da memória persistente do agente. Mede linhas E caracteres, enxuga o índice e funde tópicos irmãos, sempre com aprovação. | 1.1 |
 | [me-faca-perguntas](skills/me-faca-perguntas/SKILL.md) | Entrevista implacável antes de construir: a IA faz uma pergunta por vez, não aceita resposta vaga e caça suposições, contradições e casos de borda até a sua ideia virar um plano sólido, com critério de pronto verificável. | 1.0 |
 
 ## Como instalar
