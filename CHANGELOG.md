@@ -1,5 +1,13 @@
 # Changelog — MestreOS Skills
 
+## v1.3 — 13/08/2026
+
+Chegou o **Pacote Marketing do MestreOS**: 34 skills de marketing, growth e SEO, adaptadas de material open source consagrado da comunidade (MIT, ver LICENSES.md) com gatilhos em português e integração com a estrutura de contextos do MestreOS. Cobrem fundação (posicionamento, pesquisa de cliente, plano de marketing), conversão (cadastro, onboarding, paywall, preço, testes A/B), aquisição (anúncios, e-mails, social, lançamento, indicação), SEO e IA (auditoria, SEO programático, schema) e conteúdo/análise (copy, concorrentes, analytics). Todas leem o brief da marca em `{contexto}/marketing.md` antes de perguntar qualquer coisa. Instalação opcional pelo prompt em `prompts/instalar-pacote-marketing.md`.
+
+E uma skill nova no núcleo:
+
+- **preparar-os-dual 1.0**: deixa o OS pronto para mais de um agente ao mesmo tempo (Claude + ChatGPT/Codex + Cursor). Varre a raiz e todos os contextos e garante um `AGENTS.md` espelhado, byte a byte, ao lado de cada `claude.md`. Idempotente; quando o espelho diverge da fonte, mostra e pergunta em vez de decidir sozinho.
+
 ## v1.2 — 13/08/2026
 
 Esta rodada ataca uma coisa só: **o seu OS engorda na hora de escrever, não na hora de limpar.** Até aqui a gente tinha boas ferramentas pra faxina depois da bagunça. Agora tem filtro na entrada, e o conserto vira exceção.
