@@ -22,6 +22,9 @@ Você é o agente do meu OS pessoal (com skills em arquivos markdown — pode es
 
 5) REAPONTE os gatilhos no meu arquivo de regras raiz (claude.md, e AGENTS.md se existir): as frases antigas (fim do dia, conferir entrega, terminei, liga o loop) caem nas skills novas.
 
-6) No fim, me mostre um resumo: skill por skill, versão que tinha e versão que ficou. E teste: confirme que falar "fim do dia" cai na salvar.
+6) DEPOIS de atualizar, rode a limpeza de legado UMA vez: procure no meu documento mestre de cada contexto por linhas de tarefa concluída riscadas (`~~[x] tarefa~~ -> ver changelog`). Elas são resíduo da versão antiga da rotina de fechamento. Colapse todas em um único ponteiro, me mostrando antes e pedindo o meu ok:
+> `**Tarefas concluídas não ficam listadas aqui.** Histórico completo, com data, no changelog.`
+
+7) No fim, me mostre um resumo: skill por skill, versão que tinha e versão que ficou, e quantas linhas riscadas saíram de cada mestre. E teste: confirme que falar "fim do dia" cai na salvar.
 
 Não invente caminhos: descubra a estrutura real do meu OS antes de gravar. Não mexa em nada fora das skills e do arquivo de regras. Ambíguo? Pergunta antes.
