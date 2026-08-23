@@ -8,7 +8,7 @@ description: |
   Idempotente: pode rodar quantas vezes quiser, so mexe no que estiver faltando ou divergente.
   Gatilhos: "preparar OS dual", "preparar pro ChatGPT", "espelhar AGENTS", "sincronizar AGENTS",
   "meu OS no Cursor", "usar com Codex", "OS dual", "dois agentes".
-version: 1.0
+version: 1.1
 user-invocable: true
 ---
 
@@ -82,3 +82,19 @@ Pendente de decisao: [pasta com AGENTS.md mais novo, se houver]
 - **Nunca resolver divergencia sozinho** quando o espelho estiver mais novo que a fonte: perguntar.
 - **Nunca criar AGENTS.md em pasta que nao tem claude.md**: espelho sem fonte e lixo.
 - Esta skill nao toca em nenhum outro arquivo do OS.
+
+---
+
+## Checklist final: a execucao foi bem feita? (conferir ANTES de dizer que terminou)
+
+- [ ] Varredura cobriu a raiz E todos os contextos e subpastas (nada de assumir OS flat)
+- [ ] Todo `AGENTS.md` criado e copia IDENTICA do `claude.md` ao lado, sem uma linha editada
+- [ ] Nenhum `AGENTS.md` foi criado em pasta que nao tem `claude.md`
+- [ ] Divergencia com espelho mais novo que a fonte: perguntou ao usuario, nao resolveu sozinho
+- [ ] Execucao so aconteceu depois do OK no diagnostico do PASSO 2
+- [ ] A regra de manter os dois em sincronia foi selada onde o agente le em toda sessao (PASSO 4)
+- [ ] Nenhum outro arquivo do OS foi tocado
+- [ ] Relatorio do PASSO 5 apresentado com a lista do que foi criado e do que ja estava certo
+
+Se algum item falhou, corrigir ANTES de declarar concluido. Nunca reportar "pronto" com item pendente.
+

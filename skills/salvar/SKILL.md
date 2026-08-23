@@ -13,7 +13,7 @@ description: |
   "fim do dia", "fechar o dia", "conferir entrega", "verificar entrega",
   "revisao diaria", "terminei", "pronto", "feito", "entregue", "finalizado",
   "ta pronto?".
-version: 1.1
+version: 1.2
 user-invocable: true
 ---
 
@@ -78,6 +78,13 @@ Metade do inchaco de um OS nao vem de escrever demais: vem de escrever no lugar 
 | `soul.md` (raiz) | So carater, tom e papel do agente | Qualquer regra operacional |
 
 Regra pratica: **decisao sobe pro mestre, caso desce pro changelog, regra de tema vai pra gaveta (satelite).** O `claude.md` quase nunca e tocado.
+
+**Os 2 gatilhos de roteamento (valem em TODA escrita, mesmo com o mestre pequeno):**
+
+- Antes de gravar **estado mutavel** (status, fase atual, proximo passo, pendencia, com quem esta a bola) em qualquer lugar que NAO seja o documento mestre -> PARAR. Estado mora no mestre.
+- Antes de gravar **medicao ou inventario** (contagem, tamanho, percentual, lista densa, "medido em tal data") DENTRO do documento mestre -> PARAR. Isso nasce no satelite do tema, com data; o mestre recebe so um ponteiro de uma linha e nao repete o numero.
+
+A casa de cada informacao se decide **na escrita, pela natureza do fato** — nunca depois, na faxina, pelo tamanho do arquivo. Esperar o mestre engordar para so entao separar e enxugar gelo: ele volta a inchar na semana seguinte.
 
 ---
 
@@ -254,8 +261,13 @@ Gravar so o que a sintese confirmou **e que passou no gate do PASSO 3.5**, nos a
    - [o que foi feito] · [decisao] · (identificador do commit, se houver)
    ```
 
-3. **Documento mestre** — mover itens concluidos para o changelog (**sempre mostrando antes** de mover), adicionar pendencias novas, atualizar a data de "ultima atualizacao".
-   **Antes de adicionar pendencia nova, procurar nas que ja existem:** se o tema ja esta la, atualizar a linha existente em vez de criar uma segunda. Pendencia e 1 ou 2 linhas (o que e + o que ela destrava). Especificacao e historico nao moram aqui.
+3. **Documento mestre** — tratar os concluidos, atualizar o estado e as pendencias. **Sempre mostrando antes** e com aprovacao.
+
+   - **Item concluido SAI do mestre.** Depois que o changelog recebeu a entrada com a data, ele JA e o registro. Remover a linha do item e **nao deixar lapide** (`~~[x] tarefa~~`): linha riscada e custo fixo que o mestre paga em toda sessao so para dizer "isto ja foi feito". Na primeira vez, criar UMA unica vez, no bloco de pendencias, a nota estatica:
+     > **Tarefas concluidas nao ficam listadas aqui.** Historico completo, com data, no `changelog.md`.
+   - **Excecao — conclusao que derruba uma regra vigente.** Se a tarefa concluida reverteu uma decisao que o mestre ainda afirma (o mestre diz "nao fazer X" e a entrega justamente liberou X), apagar so a linha deixaria a instrucao morta de pe, e a proxima sessao obedeceria ela. Nesse caso: reescrever a regra **no ponto do mestre onde ela vive**, em linguagem afirmativa (o que vale HOJE), e registrar a virada (regra antiga -> nova, com data e motivo) no `changelog.md`. O mestre diz o presente; a historia da mudanca mora no changelog. Nunca manter linha riscada como "correcao historica" dentro do mestre.
+   - **Antes de adicionar pendencia nova, procurar nas que ja existem:** se o tema ja esta la, atualizar a linha existente em vez de criar uma segunda. Pendencia e 1 ou 2 linhas (o que e + o que ela destrava).
+   - Especificacao, medicao e inventario **nao moram aqui**: vao para o satelite do tema, e o mestre fica com o ponteiro de uma linha (ver os 2 gatilhos no Contrato por arquivo). Atualizar a data de "ultima atualizacao".
 
 4. **`index.md`** — atualizar se algum arquivo foi criado ou removido (no contexto e na raiz, se aplicavel).
    **Meta: 100% dos `.md` do contexto listados, sem excecao.** Antes de fechar, cruzar a lista de arquivos da pasta com o que esta no index. Satelite que ficou de fora do index e documento invisivel: daqui a um mes ninguem lembra que ele existe e alguem escreve tudo de novo em outro lugar. Faltou entrada? Adicionar na hora, sem perguntar (index e catalogo, nao e conteudo).
@@ -279,7 +291,7 @@ Dar uma olhada rapida no tamanho dos arquivos do contexto ativo (so o ativo), co
 
 | Arquivo | 🟢 OK | 🟡 Atencao | 🔴 Grande |
 |---------|-------|-----------|----------|
-| documento mestre | < 300 linhas | 300 a 500 | > 500 |
+| documento mestre | < 300 linhas E < 25 KB | 300 a 500 linhas ou 25 a 40 KB | > 500 linhas OU > 40 KB |
 | `aprendizados_do_dia.md` | < 200 linhas E < 15 KB | 200 a 250 linhas ou 15 KB | > 250 linhas OU > 15 KB |
 | `changelog.md` | < 30 KB | 30 a 50 KB | > 50 KB |
 | Por entrada (aprendizados) | ate 6 linhas | 6 a 8 linhas | > 8 linhas ou ~700 caracteres |
@@ -332,6 +344,23 @@ Como retomar: [a linha "Como retomar" do checkpoint]
 - **Nunca escrever "pra constar":** arquivo sem material novo fica intocado.
 - **O PASSO 3 (checkpoint) roda sempre:** e a razao de existir da skill.
 - **Nunca rodar sozinha:** o gatilho e 100% manual. O agente pode sugerir quando notar o contexto pesado, mas nunca executa por conta propria.
+
+---
+
+## Checklist final: a execucao foi bem feita? (conferir ANTES de dizer que terminou)
+
+- [ ] O checkpoint do PASSO 3 foi gravado (ele roda sempre, e a razao de existir da skill)
+- [ ] Todo item gravado passou pelo GATE DE ESCRITA do PASSO 3.5
+- [ ] Itens concluidos estao no changelog com a data e SAIRAM do mestre (nenhuma lapide nova)
+- [ ] Conclusao que derrubou regra: mestre reescrito em linguagem afirmativa + virada no changelog
+- [ ] Nenhuma medicao ou inventario denso entrou no mestre (foi para o satelite, com ponteiro de 1 linha)
+- [ ] Pendencia nova nao duplicou tema que ja existia; data de "ultima atualizacao" trocada
+- [ ] `index.md` cobre 100% dos `.md` do contexto, satelites criados hoje incluidos
+- [ ] Nada foi movido ou removido sem o usuario ver antes e aprovar
+- [ ] Nenhum segredo (senha, token, dado pessoal) apareceu no que foi gravado
+- [ ] Relatorio do PASSO 7 apresentado, sem saudacao, terminando em "Como retomar"
+
+Se algum item falhou, corrigir ANTES de declarar concluido. Nunca reportar "pronto" com item pendente.
 
 ---
 

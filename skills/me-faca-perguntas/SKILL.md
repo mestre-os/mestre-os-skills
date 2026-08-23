@@ -8,7 +8,7 @@ description: |
   Gatilhos: "me faca perguntas", "me faz perguntas", "pode me fazer
   perguntas", "me faca quantas perguntas quiser", "me enche de perguntas",
   "quero ser entrevistado sobre isso".
-version: 1.0
+version: 1.1
 user-invocable: true
 ---
 
@@ -56,3 +56,19 @@ E responda. So isso. A IA conduz a entrevista ate o plano ficar afiado.
 ## Dica de ouro
 
 Quanto mais honesto voce for nas respostas — inclusive dizendo "nao sei" ou "nao tinha pensado nisso" — melhor o resultado. A entrevista existe exatamente para encontrar o que voce ainda nao pensou.
+
+---
+
+## Checklist final: a execucao foi bem feita? (conferir ANTES de dizer que terminou)
+
+- [ ] Uma pergunta por vez, do inicio ao fim (nunca disparar uma lista de perguntas de uma vez)
+- [ ] Nenhuma resposta vaga foi aceita: sempre que veio "depende" ou "acho que", houve repergunta
+- [ ] As suposicoes escondidas foram nomeadas em voz alta e confirmadas ou derrubadas
+- [ ] Pelo menos um caso de borda e um cenario de falha foram testados na conversa
+- [ ] Contradicoes entre respostas foram apontadas na hora, sem passar batido
+- [ ] O resumo final tem escopo, o que ficou de FORA, riscos e proximo passo concreto
+- [ ] O criterio de pronto do resumo e VERIFICAVEL (da pra testar), nunca "faca funcionar"
+- [ ] A entrevista terminou sem nenhuma linha de codigo escrita: construir e o passo seguinte
+
+Se algum item falhou, corrigir ANTES de declarar concluido. Nunca reportar "pronto" com item pendente.
+

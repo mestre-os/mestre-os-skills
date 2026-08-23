@@ -7,7 +7,7 @@ description: |
   "reduzir arquivos", "arquivos crescendo", "limpar terreno", "organizar contexto".
   Analisa, propoe um plano e executa somente com aprovacao do usuario.
   Tambem confere a integridade dos links entre documentos (link quebrado, arquivo orfao).
-version: 1.1
+version: 1.2
 user-invocable: true
 ---
 
@@ -154,7 +154,7 @@ CLIENTEA/OUTRO-PROJETO
 
 | Arquivo | 🟢 OK | 🟡 Atencao | 🔴 Precisa de acao |
 |---------|-------|-----------|-------------------|
-| `documento_mestre.md` (qualquer nivel) | menos de 300 linhas | 300 a 500 | mais de 500 |
+| `documento_mestre.md` (qualquer nivel) | menos de 300 linhas E menos de 25KB | 300 a 500 linhas ou 25 a 40KB | mais de 500 linhas OU mais de 40KB |
 | `claude.md` | menos de 200 linhas | 200 a 300 | mais de 300 |
 | Arquivos secundarios (ex: satelites) | menos de 25KB | 25 a 40KB | mais de 40KB |
 | `changelog.md` | menos de 30KB | 30 a 50KB | mais de 50KB |
@@ -233,7 +233,10 @@ Algumas entradas nos seus aprendizados nao sao aprendizados datados: sao regras 
 
 **Analogia mesa/gaveta:** o mestre e a mesa (tudo ali carrega em toda sessao — promover regra de tema pra mesa nao reduz o imposto fixo, so muda de bolso); o satelite e a gaveta (lido so quando o tema surge — mover pra gaveta reduz de verdade).
 
-**Condicoes pra criar satelite novo:** mestre 🟡 (>300 linhas) E ~40+ linhas sobre UM mesmo tema.
+**Satelite nasce por dois criterios DIFERENTES. Nao confundir os dois.**
+
+- **Na ESCRITA (vale sempre, mesmo com o mestre pequeno):** a casa do conteudo se decide pela NATUREZA do fato, nunca pelo tamanho do arquivo. Medicao, inventario, especificacao e evidencia **nascem** no satelite do tema, com data; o mestre fica so com o ponteiro de uma linha. Estado atual, com quem esta a bola e proximo passo **nascem** no mestre. E isso que impede o mestre de engordar.
+- **No SPLIT RETROATIVO (a faxina do que JA esta dentro do mestre), as DUAS condicoes precisam ser verdade:** (1) o mestre ja esta 🟡 (mais de 300 linhas ou 25KB; prioridade se 🔴) e (2) ha ~40+ linhas sobre UM mesmo tema. Mestre pequeno nao justifica split, e splittar 10 linhas fragmenta sem ganho.
 
 O agente identifica essas regras e pergunta:
 > `"Encontrei X regras nos aprendizados que parecem permanentes. Quer que eu promova para o documento mestre?"`
@@ -244,8 +247,11 @@ O agente identifica essas regras e pergunta:
 
 **2e. Cemiterio de tarefas concluidas no mestre**
 
-A skill `salvar` cria linhas de referencia ao migrar tarefas (`~~[x] tarefa~~ → ver changelog [data]`). Elas se acumulam no mestre, que carrega em TODA sessao. A partir de ~15 dessas linhas-fantasma, propor colapsar todas em UM unico ponteiro:
-> `**Tarefas concluidas:** historico completo no changelog.`
+Versoes antigas da rotina de fechamento deixavam uma lapide no mestre a cada tarefa migrada (`~~[x] tarefa~~ → ver changelog [data]`). Da versao atual da `salvar` em diante, **o item concluido sai do mestre** — o changelog ja e o registro. Entao este bloco vira **migracao de legado, rodada uma vez**: se o scan achar linhas riscadas (qualquer quantidade, nao espere juntar 15), propor colapsar TODAS em UM unico ponteiro, com preview e aprovacao como qualquer acao desta fase:
+
+> `**Tarefas concluidas nao ficam listadas aqui.** Historico completo, com data, no changelog.`
+
+**Detector de skill velha:** se, depois dessa limpeza, aparecerem lapides NOVAS no mestre, a rotina de fechamento em uso esta desatualizada. Avisar o usuario e sugerir que ele reinstale a versao atual da `salvar` pelo canal de atualizacao do OS dele.
 
 **2f. Frontmatter de manutencao (a ficha de identificacao do arquivo)** ⭐
 
@@ -493,3 +499,18 @@ Se ainda houver arquivos 🟡 ou 🔴 restantes (itens nao aprovados), indicar c
 - **Sempre ler o arquivo antes de alterar** — nada de editar sem entender o conteudo primeiro
 - **Sempre mostrar antes/depois** para alteracoes em arquivos existentes
 - **Nunca assumir que o OS e flat** — sempre escanear raiz + pastas + subpastas antes de declarar o relatorio completo
+
+---
+
+## Checklist final: a execucao foi bem feita? (conferir ANTES de dizer que terminou)
+
+- [ ] Rodou SO no contexto aprovado; nenhum arquivo de outro contexto foi tocado
+- [ ] Todo ajuste executado tinha OK explicito do usuario (nenhuma acao por conta propria)
+- [ ] Nada foi apagado, so movido (changelog ou `historico/`), com antes/depois mostrado
+- [ ] Todo split deixou ponteiro dos DOIS lados e entrou no `index.md` na mesma rodada
+- [ ] Nenhum link quebrou: os links que APONTAM para cada arquivo movido foram re-checados
+- [ ] Estado atual e "com quem esta a bola" continuam no mestre; nenhum satelite virou dono de status
+- [ ] Lapides de tarefa concluida foram colapsadas em um unico ponteiro (migracao de legado)
+- [ ] Tabela final `arquivo | antes | depois | reducao` apresentada ao usuario
+
+Se algum item falhou, corrigir ANTES de declarar concluido. Nunca reportar "pronto" com item pendente.

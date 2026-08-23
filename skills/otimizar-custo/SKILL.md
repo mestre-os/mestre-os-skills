@@ -11,7 +11,7 @@ description: |
   R$/mes no relatorio final. Executa quando o usuario diz "otimizar custo", "reduzir custo",
   "economizar tokens", "otimizar memoria", "limpar memoria", "memoria ta cara", "higienizar
   memoria", "memoria do claude", "revisar memoria", "auditar memoria".
-version: 1.1
+version: 1.2
 user-invocable: true
 argument-hint: "(sem argumentos: roda na pasta do seu Claude Code atual)"
 ---
@@ -358,3 +358,19 @@ As tres tem ritmos diferentes de proposito, e cada uma so cobra a seguinte. Assi
 | **`otimizar-custo`** (esta) | mensal sob lembrete, ~90 dias se estiver saudavel | exclusivamente a memoria do agente | e o destino do lembrete |
 
 Rodar cada uma no seu momento mantem o sistema enxuto e barato de operar, sem transformar manutencao em ocupacao.
+
+---
+
+## Checklist final: a execucao foi bem feita? (conferir ANTES de dizer que terminou)
+
+- [ ] Working directory confirmado com o usuario (PASSO 0) antes de qualquer leitura
+- [ ] So a memoria do agente foi tocada: nenhum arquivo do OS (mestre, changelog, satelite) foi alterado
+- [ ] Toda entrada removida ou reescrita tinha OK explicito do usuario
+- [ ] Nada foi apagado sem antes verificar se o conteudo ja vive em outro lugar do OS
+- [ ] Entrada que era regra viva foi MOVIDA para o OS, nao deletada
+- [ ] Gate do PASSO 4.5 respeitado: se nao havia o que otimizar, a skill disse isso e parou
+- [ ] Nenhum segredo (senha, token, chave) foi impresso no relatorio ou nos comandos
+- [ ] Relatorio final entregue com antes/depois e a economia estimada em R$ por mes
+
+Se algum item falhou, corrigir ANTES de declarar concluido. Nunca reportar "pronto" com item pendente.
+

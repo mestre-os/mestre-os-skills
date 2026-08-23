@@ -11,7 +11,7 @@ description: |
   loop", "montar um loop", "desenhar um loop", "qual loop usar", "loop pra X", "como faço
   isso em loop".
   Se o usuário só PERGUNTA qual loop usar (não manda ligar), pare no Plano: ele é a resposta.
-version: 1.0
+version: 1.1
 user-invocable: true
 argument-hint: "[objetivo do loop] (opcional)"
 ---
@@ -219,3 +219,20 @@ Todo loop termina conferindo a entrega antes de declarar "pronto". O loop não s
 ---
 
 Esta skill funde e substitui as antigas `engenharia-de-loop` (desenhar o loop) e `loop-autonomo` (deixar rodando com segurança), que ficam mantidas apenas como redirect pra cá.
+
+---
+
+## Checklist final: a execucao foi bem feita? (conferir ANTES de dizer que terminou)
+
+- [ ] O critério de pronto é VERIFICÁVEL (dá pra testar e dizer sim ou não), nunca "faça funcionar"
+- [ ] O Plano de Loop foi apresentado e o dono aprovou ANTES de qualquer coisa ligar (o portão)
+- [ ] Os 5 pré-checks do PASSO 5 passaram; nenhum foi pulado
+- [ ] Baseline verde registrado antes da primeira iteração
+- [ ] Ambiente isolado: nada que o loop faça alcança produção ou dado real sem passar por você
+- [ ] Caminho de volta existe e foi testado (dá pra desfazer tudo em um comando)
+- [ ] Teto de iterações e teto de custo definidos, com o semáforo de custo mostrado ao dono
+- [ ] Decisão estética, de produto ou irreversível ficou FORA do loop, esperando o dono
+- [ ] Ao fechar: entrega conferida contra o critério de pronto, com evidência, não com "deve estar ok"
+
+Se algum item falhou, corrigir ANTES de declarar concluido. Nunca reportar "pronto" com item pendente.
+

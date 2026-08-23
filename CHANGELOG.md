@@ -1,5 +1,16 @@
 # Changelog — MestreOS Skills
 
+## v1.4 — 23/08/2026
+
+Atualização de arquitetura documental. O tema desta versão é um só: **parar de pagar, em toda sessão, por informação que já cumpriu o papel dela.**
+
+- **salvar 1.2**: tarefa concluída agora SAI do documento mestre depois de registrada no changelog. Antes ela virava linha riscada e ficava lá pra sempre; como o mestre é lido em toda sessão, cada lápide era custo fixo só pra dizer "isto já foi feito". Se a conclusão derrubar uma regra que o mestre ainda afirma, a skill reescreve a regra no próprio mestre em linguagem afirmativa e registra a virada no changelog, pra próxima sessão não obedecer instrução morta. Entraram também os 2 gatilhos de roteamento e o semáforo do mestre medindo linhas E KB.
+- **otimizar-os 1.2**: a faxina das lápides antigas virou migração de uma vez só, com aprovação, e não espera mais juntar quinze delas. Ganhou detector de skill velha: se aparecerem lápides novas depois da limpeza, a rotina de fechamento em uso está desatualizada e você é avisado. E o critério do satélite passou a separar duas coisas que estavam misturadas: onde o conteúdo NASCE (pela natureza do fato, sempre) e quando vale QUEBRAR o que já está grande demais (por tamanho e massa).
+- **Regra da mesa e da gaveta**, agora explícita no guia do OS e nas regras invioláveis: o mestre é a mesa (decisão vigente, status, de quem é a bola, próximo passo), o satélite é a gaveta (detalhe durável de um tema). A casa se decide na escrita, nunca na faxina. Contexto novo já nasce com a seção de satélites no mestre e com o index ensinando a listar todos.
+- **Checklist final em todas as skills**: cada uma termina com uma lista de conferência que o agente roda antes de dizer que terminou. Item pendente significa corrigir antes, não reportar "pronto".
+
+Skills atualizadas: salvar 1.2, otimizar-os 1.2, otimizar-custo 1.2, ligar-loop 1.1, me-faca-perguntas 1.1, preparar-os-dual 1.1. Cofre e escrita-densa foram para 1.1 dentro do instalador.
+
 ## v1.3 — 13/08/2026
 
 Chegou o **Pacote Marketing do MestreOS**: 34 skills de marketing, growth e SEO, adaptadas de material open source consagrado da comunidade (MIT, ver LICENSES.md) com gatilhos em português e integração com a estrutura de contextos do MestreOS. Cobrem fundação (posicionamento, pesquisa de cliente, plano de marketing), conversão (cadastro, onboarding, paywall, preço, testes A/B), aquisição (anúncios, e-mails, social, lançamento, indicação), SEO e IA (auditoria, SEO programático, schema) e conteúdo/análise (copy, concorrentes, analytics). Todas leem o brief da marca em `{contexto}/marketing.md` antes de perguntar qualquer coisa. Instalação opcional pelo prompt em `prompts/instalar-pacote-marketing.md`.
