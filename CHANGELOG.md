@@ -41,3 +41,7 @@ Lançamento do repositório oficial, junto com o MestreOS v3.0 (manual + instala
 - **otimizar-custo 1.0**: mede linhas E caracteres da memória (linha gorda também custa); enxuga o índice pra uma linha por item; funde tópicos irmãos com aprovação; relatório mostra o custo fixo da sessão antes e depois.
 
 As skills antigas ("conferir-entrega", "fim-do-dia", "engenharia-de-loop", "loop-autonomo") viram redirects: os comandos antigos continuam funcionando e caem nas skills novas.
+
+## 2026-09-12: Telegram 4.0.1
+
+Fila durável na Dupla, execução serial, confirmação de entrega, recuperação conservadora, timeout por inatividade, UTF-8 e locks Mac/Windows. Isolamento da janela Claude e roteiro de aceite para os três transportes. Pacote, hashes e prompt de atualização. 31 regressões offline em cada sistema; conversa real requer aceite por conta.

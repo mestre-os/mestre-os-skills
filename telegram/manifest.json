@@ -1,0 +1,18 @@
+{
+  "version": "4.0.1",
+  "released": "2026-09-12",
+  "files": {
+    ".meuos/hooks/cerebro.py": "8a4de4c155a69c157c43c15d1423d7cdce5014be1377429167f9b0a8478a2382",
+    ".meuos/hooks/telegram_runtime.py": "d3609ad79379b74fc7d688a25f506bf5094c8292510e1276115af99a6f40560f",
+    ".meuos/scripts/test-telegram-runtime.py": "e5324f06d229a9fca80915b68f8ae7317a779ab4729a8398989b0f59dafc07c3",
+    ".meuos/scripts/telegram-recovery.py": "8d80847a948cf8ab5f7ed2008e67b6788cafde3d931a5fd251fe9bd82683b375",
+    ".meuos/scripts/telegram-plugin-remedio.py": "290977e544debb57606268ea5fb840c337ae1ad2255eae14be61aaeb5e66a603",
+    ".meuos/scripts/telegram_send.py": "f872c7f2295fc7ac056f9b40cd39dc0288c1035e49a7ccc1c0218546e0a10ae2",
+    ".meuos/scripts/telegram-update.py": "6bcb805e9ab1e1c9e10f47934da3a82d3fbefaaae5245ef18da321503a8f0b51"
+  },
+  "validation": {
+    "mac": "31 offline checks passed",
+    "windows": "31 offline checks passed, Windows 11 ARM",
+    "live_per_account": "required during installation"
+  }
+}

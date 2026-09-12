@@ -42,3 +42,7 @@ Cada skill tem o campo `version:` no frontmatter. Seu agente compara a versão i
 ## Histórico
 
 Veja o [CHANGELOG.md](CHANGELOG.md).
+
+## Integração Telegram
+
+Pacote técnico 4.0.1 e roteiro Mac/Windows, Claude/Codex em [telegram/](telegram/). Atualização pelo [prompt específico](prompts/atualizar-telegram.md), preservando seu OS. Não há instalação silenciosa nas máquinas dos alunos.
