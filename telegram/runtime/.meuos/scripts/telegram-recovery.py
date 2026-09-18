@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Recuperação da Dupla. --install agenda; padrão recupera; --status só consulta.
+"""Recuperação da Dupla (PASSO 7D). --install agenda; padrão recupera; --status só consulta.
 Só queued é executado. Running órfão vira uncertain e nunca é repetido sozinho.
+Se a janela do bot estiver aberta, ela é quem atende: a recuperação só entra quando a janela está fechada.
 """
 import base64
 import hashlib
@@ -13,7 +14,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-HOOK = ROOT / '.meuos/hooks/cerebro.py'
+HOOK = ROOT / '.meuos/scripts/telegram_janela.py'
 LABEL = 'com.mestreos.telegram.' + hashlib.sha256(os.path.normcase(str(ROOT)).encode()).hexdigest()[:16]
 
 

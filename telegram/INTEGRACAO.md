@@ -2,10 +2,10 @@
 
 > Só comece este passo depois do PASSO 6 entregue e do usuário ter dito que quer. Explique em 1 frase o que vai acontecer: "Vamos criar um robô no Telegram que é a porta de entrada pra mim pelo celular. Você manda mensagem pra ele, eu leio aqui neste computador e respondo. Funciona enquanto este computador estiver ligado e a minha janela estiver aberta." Analogia: o bot é um interfone; quem atende sou eu, aqui dentro.
 
-**7.0 Regras deste passo (valem pra 7A e 7B).**
+**7.0 Regras deste passo (valem pra 7A, 7B e 7D).**
 - O token do bot é **segredo**. NUNCA peça pra ele colar o token no chat comigo, NUNCA repita o token, NUNCA grave o token dentro de `{{OS_DIR}}` (é pasta sincronizada). O token vai num arquivo fora do OS, que só o usuário edita (abaixo).
 - Uma máquina, **um bot, uma janela**. O Telegram entrega cada mensagem pra UM programa por vez: se duas janelas escutarem o mesmo bot, elas se derrubam. Na dúvida, identifique quem está escutando antes de mexer. Nunca feche um bot com tarefa em andamento; preserve o pedido e confira o resultado antes de repetir.
-- Ramo por IA detectada no PASSO 0.0: `{{IA}}` = claude → **7A**. `{{IA}}` = codex → **7B**. `{{IA}}` = cursor → o Cursor ainda não tem canal de Telegram. <!-- MESTRE:INICIO -->Diga: "O Cursor ainda não conversa pelo Telegram. Fala direto com o Paulo Penna, o Mestre do MestreOS, que ele te orienta: WhatsApp +55 31 99345-3332 · pauloapenna@gmail.com · mestreos.app · LinkedIn: linkedin.com/in/paulo-p-37623171."<!-- MESTRE:FIM --> Se `{{OUTRAS_IAS}}` inclui Claude, ofereça fazer o 7A por lá.
+- Ramo por IA detectada no PASSO 0.0: `{{IA}}` = claude → **7A**. `{{IA}}` = codex → **7B**. Tem os DOIS (`{{OUTRAS_IAS}}` inclui a outra, ou instalou a outra depois) → **7D** (7A e 7B não se instalam nesse caso; a janela do 7D atende os dois). `{{IA}}` = cursor → o Cursor ainda não tem canal de Telegram. <!-- MESTRE:INICIO -->Diga: "O Cursor ainda não conversa pelo Telegram. Fala direto com o Paulo Penna, o Mestre do MestreOS, que ele te orienta: WhatsApp +55 31 99345-3332 · pauloapenna@gmail.com · mestreos.app · LinkedIn: linkedin.com/in/paulo-p-37623171."<!-- MESTRE:FIM --> Se `{{OUTRAS_IAS}}` inclui Claude, ofereça fazer o 7A por lá.
 
 **7.1 Criar o bot no BotFather (usuário faz no celular, você guia frase a frase).**
 1. "Abre o Telegram e procura **@BotFather** (tem um selo azul de verificado). Manda `/newbot`."
@@ -102,50 +102,67 @@ Regras que NÃO entram: `admin_from`, `[web]`/`[bridge]`/`[management]` (o paine
 
 ---
 
-### 7C — Dupla: Claude Code + Codex no MESMO bot (só pra quem tem os dois)
+### 7C — (aposentado em 16/09/2026) → vá para o 7D
 
-> Entra SÓ se o PASSO 0.0 detectou Claude Code E o usuário marcou ChatGPT (ou detectou Codex e ele marcou Claude). Nesse caso a ordem é: 7A inteiro (a janela do bot é sempre o Claude Code) → 7C. O 7B (ponte cc-connect) NÃO se instala: seria um segundo programa disputando o mesmo bot. Quem tem uma IA só nem vê este passo. Cursor: fora (sem canal).
-> Explique em 1 frase: "Você vai ter dois cérebros no mesmo bot: o Claude, que já está ligado, e o Codex. Você troca por frase, e eu continuo sendo eu, com a mesma memória e as mesmas regras."
-
-**7C.1 Codex no caminho.** Igual ao 7B.1: `codex --version` funcionando e `codex login status` logado (Mac: o Codex do app ChatGPT mora em `/Applications/ChatGPT.app/Contents/Resources/codex`; Windows: `npm i -g @openai/codex`).
-
-**7C.2 Validar o motor portátil.** Extraia os blocos `.meuos/hooks/cerebro.py`, `.meuos/hooks/telegram_runtime.py`, `.meuos/scripts/test-telegram-runtime.py` e `.meuos/scripts/telegram-recovery.py`. Rode `"{{PYTHON}}" .meuos/hooks/cerebro.py --teste` e `"{{PYTHON}}" .meuos/scripts/test-telegram-runtime.py`. Ambos precisam terminar sem falha. São testes sem token, sem IA e sem mensagem externa. Teste automático não equivale a conversa real aprovada.
-
-**7C.3 Ligar somente na janela do bot.** Mescle no arquivo dedicado `~/.mestreos/telegram-bot.settings.json` do 7A.4 o gancho `UserPromptSubmit`: `{"type":"command","command":"\"{{PYTHON}}\" \"{{OS_DIR}}/.meuos/hooks/cerebro.py\"","timeout":15}` (ajuste aspas para o shell detectado; valide JSON). Preserve os outros ganchos. Remova somente a referência antiga a este `cerebro.py` dos settings globais se existir; mantenha backup. Nunca registre duas cópias. O gancho salva o pedido e termina rapidamente; um executor separado atende em ordem. O Codex mantém sandbox `workspace-write` tanto ao iniciar quanto ao retomar.
-
-O estado fica em `~/.mestreos/telegram/<id-da-pasta>/`, disco local, separado do Drive/OneDrive. Para atualização, com o bot ocioso, preserve a pasta antiga `.remember/cerebro/` e copie apenas `cerebro.json` para o diretório novo se ainda não existir. Não copie tarefas em execução nem apague a origem. Token pelo Cofre/arquivo local do 7A; destino obrigatoriamente autorizado.
-
-**7C.4 Recuperação e continuidade.** Rode `"{{PYTHON}}" .meuos/scripts/telegram-recovery.py --plan`, depois `--install` e `--status`. Isso agenda uma conferência a cada minuto no launchd (Mac) ou Agendador (Windows), sob o usuário logado. Uma tarefa já existente divergente exige comparação, não substituição. A recuperação executa somente pedidos `queued`; uma execução interrompida vira `uncertain` e exige conferir efeitos antes de repetir. Registre o rótulo exibido em `--plan` para eventual remoção pelo agendador.
-
-Acrescente estas regras ao `claude.md` do usuário, preservando sua identidade:
-- Responder à mensagem real do usuário, inclusive se ele mandar outra enquanto eu trabalho; confirmar entrega pelo retorno da ferramenta, nunca pela intenção de enviar.
-- Não afirmar que outro cérebro vai responder sem confirmar o encaminhamento. Se a resposta não chegou, reconhecer a pendência e conferir o pedido original.
-- A troca é feita pelo gancho. Ao voltar pro Claude, o resumo é guardado e entra na próxima mensagem real; não inventar que outro processo já respondeu.
-- Não tratar `(voice message)` como transcrição. Áudio continua no Claude com o anexo real; se faltar anexo, informar a limitação.
-
-**7C.5 Teste real no celular.** Abra a configuração nova somente quando a janela anterior estiver ociosa e tiver sido encerrada pelo usuário.
-1. Troque pro Codex, mande uma pergunta curta e confirme a resposta no celular.
-2. Durante uma resposta demorada, mande mais duas perguntas diferentes. Confira as três respostas em ordem, sem repetir a mesma ação.
-3. Peça status, mande “volta pro Claude” e depois uma nova mensagem: confira continuidade e resposta real.
-4. Mande um áudio e uma foto. Confira conteúdo, destino e resposta, sem usar o texto do envelope como áudio.
-5. Confira `completed` e recibos no SQLite. Se houver `queued`, `running` ou `uncertain`, não anuncie tudo entregue. O recibo confirma envio, não a qualidade da resposta.
-
-Falha no motor preserva o pedido e avisa que não houve conclusão. Timeout é por inatividade, não por duração total. Não reenviar automaticamente uma ação que possa já ter ocorrido.
-
-**7C.6 Entrega honesta.** Explique: "Você troca de cérebro por frase. Se mandar outras mensagens enquanto penso, elas ficam guardadas na fila. Áudio fica com o Claude. Se algo interromper, eu preservo o pedido e aviso o que ficou pendente." Anote versão do pacote, sistema, versões dos programas e resultado do teste real no `changelog.md`. Nunca declare compatibilidade completa de uma conta sem testar naquela conta.
-
-> **Modo completo (avançado, fora do instalador):** dar ao Codex as mesmas ferramentas do plugin (reagir, editar mensagem, mandar arquivo por conta própria) exige rodar o Codex sem sandbox. Fica como módulo avançado; <!-- MESTRE:INICIO -->quem quiser, fala com o Paulo Penna, o Mestre do MestreOS (WhatsApp +55 31 99345-3332 · pauloapenna@gmail.com).<!-- MESTRE:FIM -->
-
-> **Plano B (se a ponte falhar ou o hash não bater):** ponte própria em Python via `codex app-server` (protocolo JSON-RPC por stdio). Não está neste instalador; <!-- MESTRE:INICIO -->fale com o Paulo Penna, o Mestre do MestreOS (WhatsApp +55 31 99345-3332 · pauloapenna@gmail.com · mestreos.app · LinkedIn: linkedin.com/in/paulo-p-37623171).<!-- MESTRE:FIM -->
+> O 7C antigo fazia o Claude ser sempre o dono do bot e o Codex um convidado. Isso não era simétrico: quem começava pelo Codex tinha de desinstalar a ponte pra ganhar a Dupla. Foi substituído pelo **7D**, onde a janela do bot não pertence a nenhum motor. Se você está atualizando um OS que tinha o 7C: siga o 7D e, no 7D.4, remova o gancho antigo do `cerebro.py` do arquivo `~/.mestreos/telegram-bot.settings.json`. O estado da conversa (`cerebro.json`) é migrado sozinho na primeira mensagem.
 
 ---
 
-## 7D: Aceite e atualização, obrigatório nos três ramos
+### 7D — Dupla simétrica: Claude Code + Codex no MESMO bot, sem dono (quem tem os dois, em qualquer ordem)
 
-- Claude/Mac, Claude/Windows, Codex/Mac, Codex/Windows: registrar ramo e testar pergunta simples, mensagens durante trabalho, áudio/foto e falha de entrega. Dupla exige os testes extras do 7C.
-- 7A e 7B têm transportes próprios: a fila do 7C não corrige internamente o plugin nem o cc-connect. Não chamar os três de homologados só porque os testes Python passaram. Se um transporte perder mensagens durante trabalho, interrompa a instalação naquele ramo, preserve o histórico e encaminhe o diagnóstico ao responsável.
-- Nunca execute dois consumidores para o mesmo token (plugin, cc-connect, webhook, outro computador). Um erro 409 pede auditoria do consumidor; não exige token novo. Não imprimir token nem chamar getUpdates enquanto o bot estiver conectado.
+> Entra quando o usuário tem **os dois motores** nesta máquina: o PASSO 0.0 detectou um e ele marcou o outro em `{{OUTRAS_IAS}}` (Claude + ChatGPT/Codex), OU ele já fez o 7A ou o 7B e assinou a outra IA depois. Quem tem uma IA só fica no 7A ou no 7B e nem vê este passo. Cursor: fora (sem canal).
+> A regra do 7D: **nenhum motor é dono do bot.** A janela do bot é um programinha nosso, em Python (`telegram_janela.py`), que recebe a mensagem, guarda na fila, transcreve o áudio se houver como, e entrega ao cérebro que estiver ligado: o Claude Code (modo silencioso, sessão retomada) ou o Codex (thread retomada). O usuário tem um motor **principal** (o que ele já usa) e, se assinar o outro, um **secundário**. Começou só com um? Nada muda quando o outro chegar: ele entra como secundário, sem desinstalar nada.
+> Explique em 1 frase: "Você vai ter dois cérebros no mesmo bot, {{IA_NOME}} e o outro. Você troca por frase, e eu continuo sendo eu, com a mesma memória e as mesmas regras. Áudio, foto e arquivo funcionam igual nos dois."
+
+**7D.1 Os dois motores no caminho.** `claude --version` e `codex --version` precisam responder (Mac: o Codex do app ChatGPT mora em `/Applications/ChatGPT.app/Contents/Resources/codex`, crie o link `ln -sf "/Applications/ChatGPT.app/Contents/Resources/codex" /usr/local/bin/codex` ou instale `npm i -g @openai/codex`; Windows: `npm i -g @openai/codex` e `npm i -g @anthropic-ai/claude-code`). Confirme login dos dois: `codex login status` e `claude auth status` (ou abra o Claude Code uma vez). Se só um estiver instalado agora, siga o 7D mesmo assim: o `--motores` abaixo recebe `-` no lugar do secundário e o outro entra quando chegar.
+
+**7D.2 Bot e token.** Se ainda não existe bot: faça o 7.1 (BotFather). Guarde o token fora do chat e fora do OS exatamente como no 7A.3 (arquivo `~/.claude/channels/telegram/.env`, linha `TELEGRAM_BOT_TOKEN=...`, o usuário cola, você só confere que a linha existe). Quem veio do 7A ou do 7B já tem isso pronto.
+
+**7D.3 Extrair e validar o motor portátil.** Extraia os blocos `.meuos/hooks/cerebro.py`, `.meuos/hooks/telegram_runtime.py`, `.meuos/scripts/telegram_janela.py`, `.meuos/scripts/telegram_send.py`, `.meuos/scripts/test-telegram-runtime.py` e `.meuos/scripts/telegram-recovery.py`. Rode os três, todos sem token, sem IA e sem mensagem externa: `"{{PYTHON}}" .meuos/hooks/cerebro.py --teste` · `"{{PYTHON}}" .meuos/scripts/telegram_janela.py --teste` · `"{{PYTHON}}" .meuos/scripts/test-telegram-runtime.py`. Os três precisam terminar sem falha. Teste automático não equivale a conversa real aprovada.
+
+**7D.4 Uma janela só (o Telegram entrega pra UM programa por vez).** Antes de abrir a janela nova, feche o que escutava o bot até agora, sem desinstalar nada:
+- Veio do **7A** (plugin do Claude): feche a janela do bot (`/exit`). O plugin pode ficar instalado; ele só não pode estar rodando com `--channels`. Se existir `~/.mestreos/telegram-bot.settings.json` com um gancho `UserPromptSubmit` apontando pro `cerebro.py` (7C antigo), remova só esse gancho, preservando o resto do arquivo, com backup.
+- Veio do **7B** (ponte cc-connect): pare a ponte (`~/.cc-connect/cc-connect daemon uninstall --config ~/.cc-connect/config.toml`, ou feche a janela dela). O binário e a config ficam no lugar.
+- Erro 409 ao abrir a janela nova = ainda tem alguém escutando. Identifique quem antes de mexer; nunca troque o token por causa disso.
+
+**7D.5 Dizer quem é o principal.** Rode `"{{PYTHON}}" .meuos/hooks/cerebro.py --motores {{IA}} <secundario>`, onde `{{IA}}` é `claude` ou `codex` (o app onde você está) e `<secundario>` é o outro (`codex` ou `claude`), ou `-` se o outro ainda não está instalado. Confira com `--status`. O estado mora em `~/.mestreos/telegram/<id-da-pasta>/` (disco local, fora do Drive/OneDrive), nunca dentro de `{{OS_DIR}}`.
+
+**7D.6 Abrir a janela do bot e parear.** No terminal, dentro de `{{OS_DIR}}`: `"{{PYTHON}}" .meuos/scripts/telegram_janela.py` (Mac e Windows, mesmo comando). Ela imprime qual cérebro está ligado e se consegue ouvir áudio. Atalho pra ele não decorar: Mac `alias meubot='cd "{{OS_DIR}}" && "{{PYTHON}}" .meuos/scripts/telegram_janela.py'` no `~/.zshrc` (substitui o alias antigo do 7A/7B, se houver); Windows a função equivalente no `$PROFILE` do PowerShell. Diga: "`meubot` no terminal abre a janela do bot. Enquanto ela estiver aberta, o Telegram funciona; se fechar, o bot fica mudo e o que chegar depois fica guardado até abrir de novo."
+- Quem veio do 7A ou 7B já tem o número do dono em `.meuos/scripts/telegram-send.env` (7A.6) ou no `access.json` do plugin: a janela usa e não pergunta nada.
+- Sem dono ainda: peça um `oi` pro bot no celular. A janela imprime **um código de 6 letras no terminal**; o usuário manda esse código pelo Telegram e pronto, pareado (o número dele vai pro `telegram-send.env`; é um número, não é segredo). Estranho que achar o bot recebe silêncio.
+- Teste: segundo `oi` → reação 👀 no celular → resposta assinada (`🟣 Claude · Opus 5` ou `☀️ Sol`). A assinatura diz quem respondeu.
+
+**7D.7 Áudio (a transcrição pertence à janela, não ao motor).** Nenhum dos dois motores ouve áudio sozinho; a janela transcreve antes, nesta ordem: whisper local se o usuário tiver (`mlx_whisper` ou `whisper` no PATH) → chave da OpenAI (`OPENAI_API_KEY`) → chave da Groq (`GROQ_API_KEY`, **grátis**, caminho recomendado) → sem nenhum: o bot responde "não consigo ouvir; manda em texto", sem inventar conteúdo. Pra ligar a Groq: "Entra em console.groq.com, cria uma conta grátis, vai em API Keys e cria uma chave. Abre o mesmo arquivo do token e acrescenta uma linha `GROQ_API_KEY=` com a chave. Salva." Você NÃO vê a chave; confira só que a linha existe (`grep -c '^GROQ_API_KEY=' ~/.claude/channels/telegram/.env` no Mac; `Select-String` no Windows). Limite do tier grátis: áudio até 25 MB. Comando falado ("troca pro Codex") passa a funcionar porque a janela transcreve antes de decidir.
+
+**7D.8 Recuperação.** Rode `"{{PYTHON}}" .meuos/scripts/telegram-recovery.py --plan`, depois `--install` e `--status`. Isso agenda, a cada minuto, uma conferência da fila no launchd (Mac) ou no Agendador (Windows), sob o usuário logado: se a janela estiver aberta, ela cuida e a recuperação não faz nada; se estiver fechada, só pedidos `queued` são atendidos; uma execução interrompida vira `uncertain` e exige conferir efeitos antes de repetir. Uma tarefa já existente divergente exige comparação, não substituição. Registre o rótulo exibido em `--plan`.
+
+Acrescente estas regras ao `claude.md` e ao `AGENTS.md` do usuário, preservando a identidade dele:
+- Responder à mensagem real do usuário, inclusive se ele mandar outra enquanto eu trabalho; quem entrega é a janela, com recibo; eu não afirmo entrega pela intenção de enviar.
+- A troca de cérebro é feita pela janela, por frase; eu não consigo trocar sozinho e não finjo que troquei. Ao assumir, leio o resumo deixado pelo outro cérebro e continuo de onde ele parou, sem comentar o mecanismo.
+- Áudio chega transcrito e rotulado pela janela; sem transcrição, peço em texto e não invento o conteúdo.
+- Arquivo que eu quiser mandar pro celular vai pra `outputs/imagens/<data>/`; a janela envia o que aparecer lá.
+
+**7D.9 Teste real no celular (obrigatório, nos dois sentidos).**
+1. `oi` → resposta do principal, com assinatura.
+2. "troca pro Codex" (ou "troca pro Claude") → confirmação de troca; pergunta curta → resposta do outro, com a outra assinatura.
+3. Durante uma resposta demorada, mande mais duas perguntas diferentes. Confira as três respostas em ordem, sem repetição.
+4. "qual cérebro tá ligado?" → status. "volta pro <principal>" → confirmação; nova mensagem → o principal retoma o assunto (continuidade) e responde de verdade.
+5. Mande um áudio e uma foto. Áudio: com transcrição ligada, a resposta fala do conteúdo; sem, chega o aviso honesto. Foto: a resposta fala da foto.
+6. `"{{PYTHON}}" .meuos/scripts/telegram_janela.py --status`: todos os pedidos `completed`. Se houver `queued`, `running` ou `uncertain`, não anuncie tudo entregue. O recibo confirma envio, não a qualidade da resposta.
+
+**7D.10 Entrega honesta.** Explique: "Você troca de cérebro por frase, nos dois sentidos. Se mandar outras mensagens enquanto penso, elas ficam na fila e saem em ordem. Áudio funciona igual nos dois, desde que a transcrição esteja ligada. Se algo interromper, eu preservo o pedido e aviso o que ficou pendente; não repito nada sozinho." Anote versão do pacote, sistema, versões dos programas e resultado do teste real no `changelog.md`. Nunca declare compatibilidade completa de uma conta sem testar naquela conta.
+
+> **O que a janela faz e o que não faz.** Faz: receber, reagir 👀, fila em ordem, transcrever, entregar texto e arquivo com recibo, trocar cérebro por frase. Não faz: botão de permissão no celular (o Claude roda em modo silencioso com ferramentas de arquivo; terminal fica desligado por padrão, e o dono pode ampliar com `MESTREOS_CLAUDE_TOOLS`), nem edição de mensagem já enviada. Quem tem uma IA só e prefere o canal nativo continua no 7A ou 7B.
+
+> **Plano B (se a janela falhar numa máquina específica):** ponte cc-connect por motor, um bot por motor, com STT por chave. Não está neste passo; <!-- MESTRE:INICIO -->fale com o Paulo Penna, o Mestre do MestreOS (WhatsApp +55 31 99345-3332 · pauloapenna@gmail.com · mestreos.app · LinkedIn: linkedin.com/in/paulo-p-37623171).<!-- MESTRE:FIM -->
+
+---
+
+## 7E: Aceite e atualização, obrigatório nos três ramos
+
+- Claude/Mac, Claude/Windows, Codex/Mac, Codex/Windows: registrar ramo e testar pergunta simples, mensagens durante trabalho, áudio/foto e falha de entrega. Dupla (7D) exige os testes extras do 7D.9, nos dois sentidos.
+- 7A e 7B têm transportes próprios: a fila e a janela do 7D não corrigem internamente o plugin nem o cc-connect. Não chamar os três de homologados só porque os testes Python passaram. Se um transporte perder mensagens durante trabalho, interrompa a instalação naquele ramo, preserve o histórico e encaminhe o diagnóstico ao responsável.
+- Nunca execute dois consumidores para o mesmo token (plugin, cc-connect, janela do 7D, webhook, outro computador). Um erro 409 pede auditoria do consumidor; não exige token novo. Não imprimir token nem chamar getUpdates por fora enquanto uma janela estiver aberta.
 - Se chegar cobrança de áudio, recupere o anexo e a pergunta original antes de responder sobre outro assunto.
-- Atualizações oficiais: `https://github.com/mestre-os/mestre-os-skills/tree/main/telegram`. Use o prompt `prompts/atualizar-telegram.md`. Confira versão, hashes e testes; faça backup e aplique só os arquivos técnicos aprovados, preservando personalidade, memória, segredos e permissões.
+- Atualizações oficiais: `https://github.com/mestre-os/mestre-os-skills/tree/main/telegram`. Use o prompt `prompts/atualizar-telegram.md`. Confira versão, hashes e testes; faça backup e aplique só os arquivos técnicos aprovados, preservando personalidade, memória, segredos e permissões. Quem tinha o 7C migra pro 7D pelo mesmo prompt (janela nova, gancho antigo removido, estado preservado).
 - Conferir atualização pode ser automático; instalar e reiniciar exige respeitar o trabalho ativo e a autorização do dono da máquina. Nunca disparar mensagem para outros alunos nem implantar silenciosamente em suas máquinas.
-

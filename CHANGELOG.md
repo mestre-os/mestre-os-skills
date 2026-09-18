@@ -1,5 +1,13 @@
 # Changelog — MestreOS Skills
 
+## 2026-09-18: Telegram 4.1.0 (Dupla simétrica, PASSO 7D)
+
+- **Janela neutra** `telegram_janela.py`: dona do bot (getUpdates), pareamento por código de 6 letras impresso no terminal, reação 👀, fila SQLite em ordem, download de foto/voz/arquivo, transcrição em cadeia (whisper local, depois OpenAI, depois Groq grátis, senão "manda em texto", sem inventar conteúdo), entrega com recibo, `--recover` pro agendador, `--status`, `--teste`. Recusa segunda janela e para no 409.
+- **Cérebro motor-agnóstico** `cerebro.py`: principal e secundário, `--motores`, troca por frase nos dois sentidos ("troca pro Codex", "volta pro Claude", "muda pra Anthropic no modelo sonnet"), continuidade por resumo de quem sai mais as últimas trocas, Claude em `-p` com sessão retomada e ferramentas de arquivo, Codex em sandbox `workspace-write`, estado do 7C migrado sozinho.
+- 7C aposentado (redirect pro 7D); aceite renumerado pra 7E. `telegram-recovery.py` passa a chamar a janela em modo `--recover`.
+- Falha conhecida vira instrução: Claude ou Codex sem login responde "abra o Terminal e rode `claude auth login`" (ou `codex login`); cota estourada diz quando volta e sugere o outro cérebro. Antes o dono recebia só "código 1".
+- Provas offline: 65 verificações em macOS e em Windows 11 ARM. Conversa real continua sendo aceite por instalação.
+
 ## v1.4 — 23/08/2026
 
 Atualização de arquitetura documental. O tema desta versão é um só: **parar de pagar, em toda sessão, por informação que já cumpriu o papel dela.**

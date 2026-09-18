@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""cerebro.py — "Dupla" do MestreOS: Claude Code + Codex no MESMO bot de Telegram (PASSO 7C do instalador).
+"""cerebro.py — a "Dupla" simétrica do MestreOS (PASSO 7D): Claude Code e Codex no MESMO bot de Telegram,
+sem que nenhum motor seja dono da janela.
 
-Gancho UserPromptSubmit do Claude Code. O bot é um só (o plugin oficial, na "janela do bot"); quem responde é o
-cérebro: anthropic (a sessão Claude) ou openai:<modelo> (Codex rodando escondido nesta mesma pasta do OS).
-Frases no Telegram: "troca pro Codex" (= Sol) · "troca pro Sol / Terra / Luna / Astra" · "qual cérebro tá ligado?" ·
-"volta pro Claude". MODO SEGURO (padrão pra todo mundo): o Codex roda dentro do sandbox e quem entrega a resposta
-e os arquivos novos é este gancho; áudio vai sempre pro Claude. Continuidade nos dois sentidos (últimas trocas ao ir,
-resumo ao voltar) e vigia da janela do Codex (renova a conversa com resumo perto do limite).
-Mac e Windows (Python 3, sem dependências). Token do bot: TELEGRAM_BOT_TOKEN ou ~/.claude/channels/telegram/.env.
-Destino: TELEGRAM_CHAT_ID ou .meuos/scripts/telegram-send.env. Self-test: python3 cerebro.py --teste
+A janela do bot é a `telegram_janela.py` (neutra, em Python). Ela recebe a mensagem, transcreve o áudio se houver
+provedor e chama `responder()` daqui. Este módulo decide QUEM responde (o motor ativo) e devolve as ações (textos,
+arquivos) que a janela entrega no celular. Nada aqui fala com o Telegram: quem envia é a janela, com recibo.
+
+Motores: `claude` (Claude Code em modo `-p`, sessão retomada com `--resume`) e `codex` (Codex `exec`, thread retomada).
+Cada aluno tem um motor PRINCIPAL (o que ele já usa) e, se assinar o outro, um SECUNDÁRIO. Frases no Telegram, nos
+dois sentidos: "troca pro Codex / Sol / Terra / Luna / Astra" · "volta pro Claude / Opus / Sonnet / Haiku" ·
+"qual cérebro tá ligado?". Continuidade nos dois sentidos: quem sai deixa um resumo pro que entra.
+Mac e Windows (Python 3, sem dependências). Estado em ~/.mestreos/telegram/<id-da-pasta>/ (disco local, fora do Drive).
+Self-test (sem Telegram, sem IA): python3 cerebro.py --teste · Status: --status · Motores: --motores claude codex
 """
-import json, os, re, sys, subprocess, time, unicodedata, glob, shutil, datetime, hashlib
+import json, os, re, sys, subprocess, time, unicodedata, glob, shutil, datetime, hashlib, uuid, threading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telegram_runtime import Queue, activity_run
-# Windows sem console (hook/Agendador) usa cp1252 e estoura em emoji/acento → força UTF-8 (no Mac não muda nada)
+# Windows sem console (Agendador) usa cp1252 e estoura em emoji/acento → força UTF-8 (no Mac não muda nada)
 for _s in (sys.stdout, sys.stderr, sys.stdin):
     if hasattr(_s, "reconfigure"):
         try: _s.reconfigure(encoding="utf-8", errors="replace")
@@ -22,21 +26,20 @@ H = os.path.expanduser("~")
 AQUI = os.path.dirname(os.path.abspath(__file__))
 OS_DIR = os.environ.get("MESTREOS_DIR") or os.path.dirname(os.path.dirname(AQUI))          # <OS>/.meuos/hooks → <OS>
 STATE = os.environ.get("MESTREOS_CEREBRO_STATE") or os.path.join(H, ".mestreos", "telegram", hashlib.sha256(os.path.normcase(OS_DIR).encode()).hexdigest()[:16])
-TGDIR = os.environ.get("TELEGRAM_STATE_DIR") or os.path.join(H, ".claude", "channels", "telegram")
 PROJ_SLUG = "-" + re.sub(r"[^A-Za-z0-9]", "-", OS_DIR.lstrip("/")) if not OS_DIR[1:3] == ":\\" else "-" + re.sub(r"[^A-Za-z0-9]", "-", OS_DIR)
 MEMDIR = os.environ.get("MESTREOS_MEMORIA_DIR") or os.path.join(H, ".claude", "projects", PROJ_SLUG, "memory")
 CODEX = os.environ.get("MESTREOS_CODEX_BIN") or shutil.which("codex") or shutil.which("codex.cmd") or "/Applications/ChatGPT.app/Contents/Resources/codex"
-DRY = bool(os.environ.get("MESTREOS_CEREBRO_DRYRUN")); FAKE = os.environ.get("MESTREOS_CEREBRO_FAKE_CODEX")
-JOB = None; DELIVERED = 0; DELIVERY_FAILED = False
-LOGF = os.path.join(STATE, "cerebro.log"); SF = os.path.join(STATE, "cerebro.json")
-TIMEOUT = int(os.environ.get("MESTREOS_CEREBRO_TIMEOUT", "900"))
-# Renovação da conversa por tokens fica DESLIGADA (0): o `input_tokens` do turn.completed soma todas as chamadas do turno
-# (deu 437k num turno só, 10/09 00:21) e disparava renovação à toa. O Codex compacta sozinho; o hook PreCompact dele grava o checkpoint.
-ROLLOVER = int(os.environ.get("MESTREOS_CEREBRO_ROLLOVER", "0"))
+CLAUDE = os.environ.get("MESTREOS_CLAUDE_BIN") or shutil.which("claude") or shutil.which("claude.cmd") or "claude"
+FAKE_CODEX = os.environ.get("MESTREOS_CEREBRO_FAKE_CODEX"); FAKE_CLAUDE = os.environ.get("MESTREOS_CEREBRO_FAKE_CLAUDE")
+LOGF = os.path.join(STATE, "cerebro.log"); SF = os.path.join(STATE, "cerebro.json"); CONVERSA = os.path.join(STATE, "conversa.jsonl")
+TIMEOUT = int(os.environ.get("MESTREOS_CEREBRO_TIMEOUT", "900"))   # por INATIVIDADE (stdout), não por duração total
 IMG = (".png", ".jpg", ".jpeg", ".webp", ".gif"); AUD = (".oga", ".ogg", ".mp3", ".m4a", ".wav", ".opus")
-MODELOS = {"sol": "gpt-5.6-sol", "terra": "gpt-5.6-terra", "luna": "gpt-5.6-luna", "lua": "gpt-5.6-luna", "astra": "gpt-6-astra",
-           "codex": "gpt-5.6-sol", "openai": "gpt-5.6-sol", "chatgpt": "gpt-5.6-sol", "gpt": "gpt-5.6-sol"}
-EMOJI = {"sol": "☀️", "terra": "🌍", "luna": "🌙", "astra": "✨"}
+MODELOS_CODEX = {"sol": "gpt-5.6-sol", "terra": "gpt-5.6-terra", "luna": "gpt-5.6-luna", "astra": "gpt-6-astra"}
+MODELOS_CLAUDE = {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku", "fable": "fable"}
+EMOJI = {"sol": "☀️", "terra": "🌍", "luna": "🌙", "astra": "✨", "claude": "🟣"}
+# ferramentas que o Claude pode usar sozinho pelo Telegram (mesmo espírito do sandbox do Codex: ler e escrever no OS e na memória,
+# sem terminal). O dono pode ampliar com MESTREOS_CLAUDE_TOOLS="Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Bash(python3 *)".
+TOOLS_CLAUDE = [t.strip() for t in os.environ.get("MESTREOS_CLAUDE_TOOLS", "Read,Edit,Write,Glob,Grep,WebFetch,WebSearch").split(",") if t.strip()]
 
 def log(m):
     try:
@@ -47,119 +50,107 @@ def log(m):
 def norm(s):
     s = unicodedata.normalize("NFD", s or "").lower(); return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
-def nome(modelo):
-    m = re.search(r"-(sol|terra|luna|astra)\b", modelo or ""); return m.group(1).capitalize() if m else (modelo or "OpenAI")
-def assinatura(modelo):
-    m = re.search(r"-(sol|terra|luna|astra)\b", modelo or ""); return f"{EMOJI.get(m.group(1), '🟢') if m else '🟢'} {nome(modelo)}"
+def tem(motor):
+    """o motor está instalado nesta máquina? (só o binário; login/cota é assunto do próprio motor)"""
+    p = CODEX if motor == "codex" else CLAUDE
+    return os.path.isfile(p) or bool(shutil.which(p))
+
+# ---------- estado ----------
+def novo_estado(principal=None, secundario=None):
+    if not principal:
+        principal = "claude" if tem("claude") else "codex"
+        secundario = ("codex" if tem("codex") else None) if principal == "claude" else ("claude" if tem("claude") else None)
+    return {"versao": 2, "principal": principal, "secundario": secundario, "ativo": principal,
+            "claude": {"sessao": None, "modelo": None}, "codex": {"thread": None, "modelo": MODELOS_CODEX["sol"]},
+            "desde": time.strftime("%d/%m %H:%M"), "resumo_pendente": None}
 
 def load():
-    try: return json.load(open(SF, encoding="utf-8"))
-    except Exception: return {"empresa": "anthropic", "modelo": None, "thread": None, "desde": None, "tokens": 0}
+    try:
+        with open(SF, encoding="utf-8") as f: st = json.load(f)
+    except Exception: return novo_estado()
+    if st.get("versao") != 2:  # estado do 7C (Claude dono do bot): migra sem perder a conversa do Codex
+        novo = novo_estado("claude", "codex" if tem("codex") else None)
+        if st.get("empresa") == "openai":
+            novo["ativo"] = "codex"; novo["codex"] = {"thread": st.get("thread"), "modelo": st.get("modelo") or MODELOS_CODEX["sol"]}
+        return novo
+    return st
+
 def save(st):
     os.makedirs(STATE, exist_ok=True); tmp = SF + ".tmp"
-    json.dump(st, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1); os.replace(tmp, SF)
+    with open(tmp, "w", encoding="utf-8") as f: json.dump(st, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, SF)
 
-# ---------- Telegram (Bot API direta) ----------
-def token():
-    # Mesmo Cofre dos robôs: Keychain no Mac, DPAPI no Windows; sem leitura no chat.
-    sys.path.insert(0, os.path.join(OS_DIR, ".meuos", "scripts"))
+def nome_modelo(motor, modelo):
+    if motor == "codex":
+        m = re.search(r"-(sol|terra|luna|astra)\b", modelo or ""); return m.group(1).capitalize() if m else (modelo or "OpenAI")
+    m = re.search(r"(opus|sonnet|haiku|fable)[-\s]?(\d+)?(?:[-.](\d+))?", modelo or "")
+    if not m: return "Claude"
+    v = (m.group(2) or "") + (("." + m.group(3)) if m.group(3) else "")
+    return f"{m.group(1).capitalize()}{(' ' + v) if v else ''}"
+
+def assinatura(motor, modelo=None):
+    if motor == "codex":
+        m = re.search(r"-(sol|terra|luna|astra)\b", modelo or ""); return f"{EMOJI.get(m.group(1), '🟢') if m else '🟢'} {nome_modelo('codex', modelo)}"
+    return f"🟣 Claude · {nome_modelo('claude', modelo)}" if modelo else "🟣 Claude"
+
+def status_txt(st):
+    outro = st.get("secundario")
+    ativo = st["ativo"]; modelo = st[ativo].get("modelo")
+    base = f"🧠 Cérebro ligado: {assinatura(ativo, modelo)} desde {st.get('desde', '?')} (principal: {st['principal'].capitalize()})."
+    if not outro: return base + " Você tem só este motor; se um dia assinar o outro, ele entra como secundário sem desinstalar nada."
+    dica = '"troca pro Codex" (Sol; ou Terra, Luna, Astra)' if outro == "codex" else '"troca pro Claude" (ou Opus, Sonnet, Haiku)'
+    return base + f" Pra trocar: {dica}."
+
+# ---------- continuidade (a janela grava a conversa; quem sai deixa um resumo) ----------
+def registrar(quem, texto):
     try:
-        from telegram_send import token as read_token
-        return read_token()
-    except ImportError:
-        return os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-
-
-def chat_id_dono():
-    c = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if c: return c
-    try:
-        for ln in open(os.path.join(OS_DIR, ".meuos", "scripts", "telegram-send.env"), encoding="utf-8"):
-            if ln.startswith("TELEGRAM_CHAT_ID="): return ln.split("=", 1)[1].strip()
+        os.makedirs(STATE, exist_ok=True)
+        with open(CONVERSA, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "quem": quem, "texto": (texto or "")[:600]}, ensure_ascii=False) + "\n")
     except Exception: pass
-    try:
-        a = json.load(open(os.path.join(TGDIR, "access.json"))); return str((a.get("allowFrom") or [""])[0])
-    except Exception: return ""
 
-def tg(method, fields=None, files=None):
-    if DRY:
-        global DELIVERED, DELIVERY_FAILED
-        if method != "sendChatAction": DELIVERED += 1
-        print(f"DRY tg {method} {json.dumps(fields or {}, ensure_ascii=False)[:200]} files={list((files or {}).values())}", file=sys.stderr); return True
-    tok = token()
-    if not tok: log("sem token do bot"); return False
-    cmd = ["curl", "-s", "--max-time", "60", "-K", "-"]
-    for k, v in (fields or {}).items(): cmd += (["-F", f"{k}={v}"] if files else ["--data-urlencode", f"{k}={v}"])
-    for k, p in (files or {}).items(): cmd += ["-F", f"{k}=@{p}"]
-    try:
-        r = subprocess.run(cmd, input=f'url = "https://api.telegram.org/bot{tok}/{method}"\n', capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
-        result = json.loads(r.stdout)
-        ok = result.get("ok") is True
-        if method in ("sendMessage", "sendPhoto", "sendDocument"):
-            mid = (result.get("result") or {}).get("message_id")
-            ok = ok and mid is not None
-            if ok:
-                if JOB: Queue(STATE).receipt(JOB, mid, method)
-                DELIVERED += 1
-            else: DELIVERY_FAILED = True
-        if not ok: log(f"tg {method} falhou: HTTP/API sem confirmação")
-        return ok
-    except Exception:
-        DELIVERY_FAILED = True; log(f"tg {method}: entrega não confirmada"); return False
-
-def send_text(chat, text):
-    text = (text or "").strip() or "(sem texto)"; ok = True
-    while text:
-        chunk, text = text[:3900], text[3900:]
-        ok = tg("sendMessage", {"chat_id": chat, "text": chunk, "disable_web_page_preview": "true"}) and ok
-    return ok
-
-def send_file(chat, path):
-    if path.lower().endswith(IMG) and os.path.getsize(path) < 10 * 1024 * 1024: return tg("sendPhoto", {"chat_id": chat}, {"photo": path})
-    return tg("sendDocument", {"chat_id": chat}, {"document": path})
-
-def block(reason):
-    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False)); sys.exit(0)
-def add_context(text):
-    if JOB:
-        handoff = os.path.join(STATE, "claude-handoff.json")
-        with open(handoff, "w", encoding="utf-8") as f: json.dump(text, f, ensure_ascii=False)
-        send_text(chat_id_dono(), "🟣 Voltei pro Claude. Seu contexto ficou guardado; pode mandar a próxima mensagem.")
-        block("[contexto preservado para a próxima mensagem do Claude]")
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}, ensure_ascii=False)); sys.exit(0)
-
-# ---------- continuidade ----------
 def ultimas_trocas(n=16):
     try:
-        proj = os.path.dirname(MEMDIR)
-        cands = sorted(glob.glob(os.path.join(proj, "*.jsonl")), key=os.path.getmtime)[-3:]
+        linhas = open(CONVERSA, "rb").read()[-200_000:].decode("utf-8", "ignore").splitlines()
         out = []
-        for c in cands:
-            for ln in open(c, "rb").read()[-1_000_000:].decode("utf-8", "ignore").splitlines():
-                if '"queue-operation"' in ln and '"enqueue"' in ln:
-                    m = re.search(r'message_id="(\d+)"[^>]*>(.*?)</channel>', ln, re.S)
-                    if m: out.append(("Dono", m.group(2).replace("\\n", " ").strip()[:400]))
-                elif "telegram__reply" in ln:
-                    m = re.search(r'\\"text\\":\\"(.*?)\\"(?:,|})', ln)
-                    if m: out.append(("Agente", m.group(1).replace("\\\\n", " ").replace('\\\\"', '"').strip()[:400]))
-        return "\n".join(f"- {q}: {t}" for q, t in out[-n:])
-    except Exception as e: log(f"ultimas_trocas: {e!r}"); return ""
+        for ln in linhas:
+            try: d = json.loads(ln)
+            except Exception: continue
+            out.append(f"- {d.get('quem')}: {(d.get('texto') or '').replace(chr(10), ' ')[:400]}")
+        return "\n".join(out[-n:])
+    except Exception: return ""
 
-# ---------- Codex (modo seguro: sandbox, gancho entrega) ----------
-def prefixo(st, primeira):
+# ---------- motores ----------
+def instrucoes(motor):
     hoje = datetime.date.today().isoformat(); out_dir = os.path.join(OS_DIR, "outputs", "imagens", hoje)
-    p = (f"[Modo Telegram · cérebro OpenAI. Você é o agente do dono deste OS (leia AGENTS.md desta pasta: mesma personalidade, regras e skills). "
-         f"A mensagem abaixo chegou pelo Telegram dele. Responda em português, curto, texto puro (sem markdown pesado): o que você escrever como "
-         f"resposta final é o que ele vai receber no celular. Não assine. Memória do agente: {MEMDIR} (leia MEMORY.md e os arquivos relevantes; "
-         f"grave feedback/decisão lá também). Fotos que chegam ficam em {TGDIR}/inbox/. Imagem gerada/restaurada: use a ferramenta de imagem "
-         f"(gpt-image-2) e salve em {out_dir}/ — o que aparecer lá eu envio pro celular dele. Skill `salvar` e os outros ritos do OS valem aqui igual. "
-         f"Você NÃO consegue trocar de cérebro: se ele pedir pra voltar pro Claude, responda só: 'pra voltar, manda exatamente: volta pro Claude'. "
-         f"Seja rápido: leia MEMORY.md e só os arquivos que a pergunta pedir; não varra pastas nem skills sem necessidade.]\n")
-    if primeira:
-        tr = ultimas_trocas()
-        if tr: p += f"\n[Contexto: você acabou de assumir a conversa; últimas trocas pelo Telegram (\"Agente\" era a sessão Claude):\n{tr}\n]\n"
-        if st.get("resumo_anterior"): p += f"\n[Resumo da sua conversa anterior (janela renovada): {st['resumo_anterior']}]\n"
-    return p + "\n"
+    return (f"[Modo Telegram · janela do MestreOS. Você é o agente do dono deste OS (mesma personalidade, regras e skills de sempre; "
+            f"{'leia AGENTS.md desta pasta' if motor == 'codex' else 'seu claude.md e soul.md já estão carregados'}). "
+            f"A mensagem abaixo chegou pelo Telegram dele. Responda em português, curto, texto puro (sem markdown pesado): o que você "
+            f"escrever como resposta final é o que ele vai receber no celular. Não assine. Memória do agente: {MEMDIR} (leia MEMORY.md e só os "
+            f"arquivos que a pergunta pedir; grave feedback/decisão lá também). Arquivo que você quiser mandar pro celular: salve em {out_dir}/ "
+            f"(tudo que aparecer lá eu envio). Skill `salvar` e os outros ritos do OS valem aqui igual. Você NÃO consegue trocar de cérebro: "
+            f"se ele pedir, responda só: 'pra trocar, manda: troca pro Codex' (ou 'volta pro Claude'). Seja rápido: não varra pastas nem skills "
+            f"sem necessidade.]")
+
+def prefixo_continuidade(st, motor):
+    p = ""
+    rp = st.get("resumo_pendente")
+    if rp and rp.get("para") == motor and rp.get("texto"):
+        p += f"\n[Continuidade: você acabou de assumir a conversa. Resumo deixado pelo outro cérebro ({rp.get('de', '?')}):\n{rp['texto']}\n]\n"
+    tr = ultimas_trocas()
+    if tr and (rp or not st[motor].get("thread" if motor == "codex" else "sessao")):
+        p += f"\n[Últimas trocas pelo Telegram (\"Agente\" é o cérebro que respondia antes):\n{tr}\n]\n"
+    return p
+
+def novos_arquivos(antes):
+    hoje = datetime.date.today().isoformat(); out_dir = os.path.join(OS_DIR, "outputs", "imagens", hoje)
+    return [n for n in sorted(set(glob.glob(os.path.join(out_dir, "*"))) - antes, key=os.path.getmtime) if os.path.isfile(n)]
+
+def _out_dir_antes():
+    hoje = datetime.date.today().isoformat(); out_dir = os.path.join(OS_DIR, "outputs", "imagens", hoje)
+    try: os.makedirs(out_dir, exist_ok=True)
+    except OSError as e: log(f"pasta de saída indisponível ({e.__class__.__name__}); sigo sem envio de arquivos")
+    return set(glob.glob(os.path.join(out_dir, "*")))
 
 def codex_command():
     if str(CODEX).lower().endswith((".cmd", ".bat")):
@@ -171,40 +162,29 @@ def codex_command():
         return [node, js]
     return [CODEX]
 
-def run_codex(st, prompt, imagens):
-    outf = os.path.join(STATE, "ultima.txt"); hoje = datetime.date.today().isoformat()
-    out_dir = os.path.join(OS_DIR, "outputs", "imagens", hoje); os.makedirs(out_dir, exist_ok=True)
-    antes = set(glob.glob(os.path.join(out_dir, "*")))
+def motor_codex(st, prompt, imagens, batimento=None):
+    """Roda o Codex (sandbox workspace-write, thread retomada). Devolve (ok, resposta, arquivos_novos, erro)."""
+    c = st["codex"]; outf = os.path.join(STATE, "ultima-codex.txt"); antes = _out_dir_antes()
     try: os.remove(outf)
     except FileNotFoundError: pass
-    t0 = time.time()
-    if FAKE: return True, FAKE, st.get("thread") or "fake-thread", 1234, round(time.time() - t0, 1), []
+    if FAKE_CODEX:
+        c["thread"] = c.get("thread") or "fake-thread"; return True, FAKE_CODEX, [], ""
     roots = 'sandbox_workspace_write.writable_roots=["' + MEMDIR.replace("\\", "/") + '","' + os.path.join(OS_DIR, "outputs").replace("\\", "/") + '"]'
-    comum = ["--skip-git-repo-check", "-m", st["modelo"], "-c", roots, "-c", "sandbox_workspace_write.network_access=true", "-o", outf]
-    if st.get("thread"):
+    comum = ["--skip-git-repo-check", "-m", c["modelo"], "-c", roots, "-c", "sandbox_workspace_write.network_access=true", "-o", outf]
+    if c.get("thread"):
         cmd = codex_command() + ["exec", "resume", "--json", "-c", 'sandbox_mode="workspace-write"'] + comum
         for i in imagens: cmd += ["-i", i]
-        cmd += [st["thread"], prompt]
+        cmd += [c["thread"], prompt]
     else:
         cmd = codex_command() + ["exec", "--json", "-C", OS_DIR, "-s", "workspace-write"] + comum
         for i in imagens: cmd += ["-i", i]
         cmd += [prompt]
-    # "digitando…" no celular enquanto o Codex pensa (o Telegram apaga em 5 s; repetir a cada 4 s)
-    import threading
-    parar = threading.Event()
-    def batimento():
-        while not parar.is_set():
-            tg("sendChatAction", {"chat_id": chat_id_dono(), "action": "typing"}); parar.wait(4)
-    th = threading.Thread(target=batimento, daemon=True); th.start()
     try: r = activity_run(cmd, cwd=OS_DIR, timeout=TIMEOUT)
-    except subprocess.TimeoutExpired: parar.set(); return False, f"ficou sem atividade por {TIMEOUT // 60} min; resultado precisa de conferência", st.get("thread"), 0, round(time.time() - t0, 1), []
-    finally: parar.set()
-    thread, tokens = st.get("thread"), 0
+    except subprocess.TimeoutExpired: return False, "", [], f"ficou sem atividade por {TIMEOUT // 60} min; resultado precisa de conferência"
     for ln in (r.stdout or "").splitlines():
         try: d = json.loads(ln)
         except Exception: continue
-        if isinstance(d, dict) and d.get("type") == "thread.started" and d.get("thread_id"): thread = d["thread_id"]
-        if isinstance(d, dict) and d.get("type") == "turn.completed": tokens = int((d.get("usage") or {}).get("input_tokens") or 0)
+        if isinstance(d, dict) and d.get("type") == "thread.started" and d.get("thread_id"): c["thread"] = d["thread_id"]
     resp = ""
     try:
         with open(outf, encoding="utf-8") as f: resp = f.read().strip()
@@ -214,194 +194,273 @@ def run_codex(st, prompt, imagens):
         for ln in (r.stderr or "").splitlines() + (r.stdout or "").splitlines():
             m = re.search(r'"message":"([^"]{0,160})"', ln)
             if m and "chronicle" not in m.group(1): erro = m.group(1); break
-        return False, erro or f"código {r.returncode}", thread, tokens, round(time.time() - t0, 1), []
-    novos = [n for n in sorted(set(glob.glob(os.path.join(out_dir, "*"))) - antes, key=os.path.getmtime) if os.path.isfile(n)]
-    return True, resp, thread, tokens, round(time.time() - t0, 1), novos
+        bruto = (r.stderr or "") + "\n" + (r.stdout or "")
+        if causa_conhecida(bruto) and not causa_conhecida(erro): erro = bruto[-600:]
+        return False, "", [], erro or f"código {r.returncode}"
+    return True, resp, novos_arquivos(antes), ""
 
-def resumo_thread(st, motivo):
-    if FAKE or not st.get("thread"): return st.get("resumo_anterior") or "(sem conversa registrada)"
-    outf = os.path.join(STATE, "resumo.txt")
-    p = f"[{motivo}] Resuma em até 12 linhas o que rolou nesta conversa pelo Telegram: assuntos, decisões, pendências, arquivos, o que o dono esperava. Texto puro."
+def motor_claude(st, prompt, imagens, batimento=None):
+    """Roda o Claude Code em modo -p (sessão retomada). Devolve (ok, resposta, arquivos_novos, erro)."""
+    c = st["claude"]; antes = _out_dir_antes()
+    if FAKE_CLAUDE:
+        c["sessao"] = c.get("sessao") or "fake-sessao"; c["modelo"] = c.get("modelo") or "claude-fake-1"; return True, FAKE_CLAUDE, [], ""
+    if imagens: prompt += "\n[Fotos anexas (abra com a ferramenta Read): " + ", ".join(imagens) + "]"
+    cmd = [CLAUDE, "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
+           "--append-system-prompt", instrucoes("claude"), "--add-dir", MEMDIR]
+    if TOOLS_CLAUDE: cmd += ["--allowedTools"] + TOOLS_CLAUDE
+    if c.get("modelo_pedido"): cmd += ["--model", c["modelo_pedido"]]
+    if c.get("sessao"): cmd += ["--resume", c["sessao"]]
+    else: c["sessao"] = str(uuid.uuid4()); cmd += ["--session-id", c["sessao"]]
+    try: r = _run_stdin(cmd, prompt)
+    except subprocess.TimeoutExpired: return False, "", [], f"ficou sem atividade por {TIMEOUT // 60} min; resultado precisa de conferência"
+    resp, ok, erro = "", False, ""
+    for ln in (r.stdout or "").splitlines():
+        try: d = json.loads(ln)
+        except Exception: continue
+        if isinstance(d, dict) and d.get("type") == "result":
+            resp = (d.get("result") or "").strip(); ok = not d.get("is_error") and d.get("subtype") == "success"
+            if d.get("session_id"): c["sessao"] = d["session_id"]
+            usados = list((d.get("modelUsage") or {}).keys())
+            if usados: c["modelo"] = usados[-1]
+            if not ok: erro = d.get("subtype") or "erro"
+    if r.returncode != 0 and not resp:
+        m = re.search(r"(?i)(error|erro)[^\n]{0,160}", r.stderr or ""); erro = erro or (m.group(0) if m else f"código {r.returncode}")
+        # sessão que não existe mais (apagada/limpa) → recomeça na próxima
+        if c.get("sessao") and re.search(r"(?i)no conversation|not found|session", r.stderr or ""): c["sessao"] = None
+    bruto = resp + "\n" + (r.stderr or "")
+    if (not ok or not resp or r.returncode != 0) and causa_conhecida(bruto): return False, "", [], bruto[-600:]
+    if not ok or not resp: return False, "", [], erro or "sem resposta"
+    return True, resp, novos_arquivos(antes), ""
+
+def _run_stdin(cmd, prompt):
+    """activity_run com o prompt pelo stdin (nunca no argv: no Windows o claude.cmd passa por cmd.exe)."""
+    import queue as _q
+    p = subprocess.Popen(cmd, cwd=OS_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    def escrever():
+        try: p.stdin.write(prompt.encode("utf-8")); p.stdin.close()
+        except Exception: pass
+    threading.Thread(target=escrever, daemon=True).start()
+    events = _q.Queue()
+    def read(stream, kind):
+        try:
+            for line in iter(stream.readline, b""): events.put((kind, line))
+        finally: stream.close(); events.put((kind, None))
+    for stream, kind in ((p.stdout, "out"), (p.stderr, "err")): threading.Thread(target=read, args=(stream, kind), daemon=True).start()
+    data = {"out": [], "err": []}; ends = 0; last = time.monotonic()
     try:
-        subprocess.run(codex_command() + ["exec", "resume", "--json", "-c", 'sandbox_mode="workspace-write"', "--skip-git-repo-check", "-m", st["modelo"], "-o", outf, st["thread"], p], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, cwd=OS_DIR)
-        return open(outf, encoding="utf-8").read().strip()[:3000]
-    except Exception as e: log(f"resumo: {e!r}"); return "(não consegui resumir)"
+        while ends < 2:
+            remaining = TIMEOUT - (time.monotonic() - last)
+            if remaining <= 0: raise subprocess.TimeoutExpired(cmd[0], TIMEOUT)
+            try: kind, line = events.get(timeout=min(remaining, .2))
+            except _q.Empty: continue
+            if line is None: ends += 1
+            else:
+                if kind == "out": last = time.monotonic()
+                data[kind].append(line)
+        p.wait(timeout=max(.1, TIMEOUT - (time.monotonic() - last)))
+    except BaseException:
+        p.kill(); p.wait(); raise
+    return subprocess.CompletedProcess(cmd, p.returncode, b"".join(data["out"]).decode("utf-8", "replace"), b"".join(data["err"]).decode("utf-8", "replace"))
 
-# ---------- comandos ----------
-# Ditado (Voice Ink) erra nome próprio: "Claudio", "cloud", "clode", "códex", "codecs"… → aceitar as variações.
-RE_TROCA = re.compile(r"\b(troca|trocar|muda|mudar|liga|ligar|ativa|ativar|usa|usar|passa|passar|bota|botar|coloca|colocar|volta|voltar|volte)\b(?:\s+(?:pro|pra|para|o|a|no|na|de|do|pelo|pela|modelo|cerebro|ai))*\s+([a-z][a-z0-9.-]*)\b")  # "volta pro Codex" também é troca
-RE_VOLTA = re.compile(r"\b(volta|voltar|volte|retorna|retornar|devolve|devolver)\b.*?\b(claud\w*|cloud\w*|clode|anthropic|antropic|opus|fable|sonnet|haiku)\b")
-def alvo_modelo(palavra):
-    """normaliza o que o ditado escreveu: codecs/códex/codes → codex; claud* fica fora (é volta)."""
-    p = palavra.lower()
-    if p in MODELOS: return p
-    if p.startswith("cod"): return "codex"
-    if p.startswith("astr"): return "astra"
-    if p.startswith("terr"): return "terra"
-    if p.startswith("lun") or p == "lua": return "luna"
-    if p.startswith("sol"): return "sol"
-    if p.startswith("open") or p.startswith("chat") or p.startswith("gpt"): return "openai"
-    return p
+RE_LOGIN = re.compile(r"(?i)not logged in|login expired|please run /login|invalid api key|oauth token[^\n]{0,30}expired|authentication_error|401 unauthorized|please log ?in|run `?codex login")
+RE_COTA = re.compile(r"(?i)usage limit|hit your (usage )?limit|limit reached|quota|credit balance is too low|rate limit")
+RE_VOLTA_COTA = re.compile(r"(?i)try again (?:at|in) ([^.\n\"]{3,60})")
+
+def causa_conhecida(texto):
+    """stderr/resultado do motor → ("login", "") | ("cota", "quando volta") | None. Sem isso o dono recebia só 'código 1'."""
+    t = texto or ""
+    if RE_LOGIN.search(t): return ("login", "")
+    if RE_COTA.search(t):
+        m = RE_VOLTA_COTA.search(t); return ("cota", m.group(1).strip() if m else "")
+    return None
+
+def aviso_falha(st, motor, erro):
+    quem = "Claude" if motor == "claude" else "Codex"
+    outro = st.get("secundario") if st["ativo"] == st["principal"] else st["principal"]
+    troca = f" Enquanto isso, \"troca pro {'Codex' if outro == 'codex' else 'Claude'}\" que eu sigo com o outro." if outro else ""
+    causa = causa_conhecida(erro)
+    if causa and causa[0] == "login":
+        cmd = "claude auth login" if motor == "claude" else "codex login"
+        return f"🔑 O {quem} perdeu o login neste computador. Abra o Terminal, rode `{cmd}`, entre na sua conta e me mande a mensagem de novo. Não fiz nada do seu pedido.{troca}"
+    if causa and causa[0] == "cota":
+        volta = f" Volta em: {causa[1]}." if causa[1] else ""
+        return f"⏳ O {quem} bateu no limite do plano.{volta} Não fiz nada do seu pedido; quando o limite voltar, é só mandar de novo.{troca}"
+    quem_modelo = "Claude" if motor == "claude" else nome_modelo("codex", st["codex"].get("modelo"))
+    return (f"⚠️ O cérebro {quem_modelo} parou antes de concluir ({(erro or 'sem detalhe')[:120]}). Guardei seu pedido; não repeti nada sozinho."
+            + (f" Se quiser, \"troca pro {'Codex' if outro == 'codex' else 'Claude'}\" pra seguir com o outro." if outro else ""))
+
+MOTORES = {"codex": motor_codex, "claude": motor_claude}
+
+def resumir(st, motor):
+    """pede ao motor que está saindo um resumo da conversa (continuidade pro outro). Sem conversa = sem resumo."""
+    houve = bool(st["codex"].get("thread")) if motor == "codex" else bool(st["claude"].get("sessao"))
+    if not houve: return ""
+    if (motor == "codex" and FAKE_CODEX) or (motor == "claude" and FAKE_CLAUDE): return "(resumo fake)"
+    p = "[O dono vai trocar de cérebro] Resuma em até 12 linhas o que rolou nesta conversa pelo Telegram: assuntos, decisões, pendências, arquivos, o que ele esperava. Texto puro, sem ferramentas."
+    try:
+        ok, resp, _, _ = MOTORES[motor](st, p, [])
+        return resp[:3000] if ok else "(não consegui resumir)"
+    except Exception as e: log(f"resumo {motor}: {e!r}"); return "(não consegui resumir)"
+
+# ---------- comandos (ditado erra nome próprio: "Claudio", "cloud", "codecs", "códex"… → aceitar as variações) ----------
+VERBOS = r"(troca|trocar|muda|mudar|liga|ligar|ativa|ativar|usa|usar|passa|passar|bota|botar|coloca|colocar|volta|voltar|volte|retorna|retornar|devolve|devolver)"
+RE_CMD = re.compile(r"\b" + VERBOS + r"\b(?:\s+(?:pro|pra|para|o|a|no|na|de|do|pelo|pela|modelo|cerebro|ai|com|ao))*\s+([a-z][a-z0-9.-]*)\b")
 RE_STATUS = re.compile(r"\b(qual|que|quem)\b.*\b(cerebro|modelo|respondendo|ligado|ativo)\b")
 
-def status_txt(st):
-    if st.get("empresa") == "openai":
-        return f"🧠 Cérebro: OpenAI · {nome(st['modelo'])} ({st['modelo']}) desde {st.get('desde', '?')} · janela ~{int(st.get('tokens') or 0)//1000}k/272k. \"volta pro Claude\" quando quiser."
-    return "🧠 Cérebro: Anthropic (a janela do bot, Claude). \"troca pro Codex\" (Sol) ou Terra, Luna, Astra pra falar com a OpenAI."
+def alvo(palavra):
+    """palavra ditada → (motor, modelo) ou None."""
+    p = palavra.lower()
+    if p.startswith(("claud", "cloud", "clode", "anthropic", "antropic")): return ("claude", None)
+    for k in MODELOS_CLAUDE:
+        if p.startswith(k[:4]): return ("claude", k)
+    if p.startswith(("codex", "codec", "codes", "code", "openai", "chatgpt", "gpt")): return ("codex", "sol")  # "codigo" fica de fora
+    if p.startswith("astra"): return ("codex", "astra")
+    if p.startswith("terra"): return ("codex", "terra")
+    if p.startswith("luna") or p == "lua": return ("codex", "luna")
+    if p == "sol": return ("codex", "sol")
+    return None
 
-def main(d=None):
-    if d is None:
-        try: d = json.load(sys.stdin)
-        except Exception: return 0
-    prompt = d.get("prompt") or ""
-    m = re.search(r'<channel source="(?:plugin:)?telegram[^>]*chat_id="(\d+)"[^>]*message_id="(\d+)"[^>]*>(.*?)</channel>', prompt, re.S)
-    if not m: return 0
-    chat, mid, corpo = m.group(1), m.group(2), m.group(3).strip()
-    dono = chat_id_dono()
-    if not dono or chat != dono: return 0
-    anexos = [p for p in re.findall(r"(/[^\s\"'<>]+/channels/telegram/inbox/[^\s\"'<>]+|[A-Za-z]:\\[^\s\"'<>]+channels\\telegram\\inbox\\[^\s\"'<>]+)", prompt) if os.path.exists(p)]
-    imagens = [p for p in anexos if p.lower().endswith(IMG)]; audios = [p for p in anexos if p.lower().endswith(AUD)]
-    texto = re.sub(r"\[(photo|imagem|foto|document|arquivo|voice|audio|áudio)[^\]]*\]", "", corpo).strip()
-    n = norm(texto); st = load()
-    if len(n) < 120 and not audios:
-        mt = RE_TROCA.search(n)
-        if mt and not RE_VOLTA.search(n) and (alvo_modelo(mt.group(2)) in MODELOS or mt.group(2) in MODELOS.values() or (mt.group(1) in ("troca", "trocar", "muda", "mudar") and len(n.split()) <= 6)):
-            alvo = alvo_modelo(mt.group(2)); modelo = MODELOS.get(alvo) or (mt.group(2) if mt.group(2) in MODELOS.values() else None)
-            if not modelo:
-                send_text(chat, f"🤔 Não achei o modelo \"{alvo}\". Cérebros OpenAI: Sol, Terra, Luna, Astra. Ex.: \"troca pro Sol\"."); block("[cérebro: modelo desconhecido, já avisei]")
-            resumo = resumo_thread(st, "Troca de modelo") if st.get("empresa") == "openai" and st.get("modelo") != modelo else None
-            save({"empresa": "openai", "modelo": modelo, "thread": None, "desde": time.strftime("%d/%m %H:%M"), "tokens": 0, "resumo_anterior": resumo})
-            send_text(chat, f"{assinatura(modelo)} ligado. Sou eu mesmo, só que pensando com a OpenAI. \"volta pro Claude\" quando quiser.")
-            log(f"troca → openai:{modelo}"); block("[cérebro: troquei pra OpenAI e já avisei no Telegram]")
-        if RE_VOLTA.search(n):
-            if st.get("empresa") == "openai":
-                houve = bool(st.get("thread"))
-                resumo = resumo_thread(st, "O dono pediu pra voltar pro Claude") if houve else ""
-                save({"empresa": "anthropic", "modelo": None, "thread": None, "desde": time.strftime("%d/%m %H:%M"), "tokens": 0}); log("volta → anthropic")
-                if houve:
-                    add_context(f"[cérebro: o dono acabou de voltar pra você (Anthropic) depois de conversar com o cérebro OpenAI ({nome(st['modelo'])}). Resumo do que rolou lá:\n{resumo}\n\nResponda pelo reply, curto, confirmando que voltou e retomando de onde ele parou. Não comente o mecanismo da troca.]")
-                add_context(f"[cérebro: o dono ligou o cérebro OpenAI ({nome(st['modelo'])}) e voltou pra você sem conversar lá. Responda pelo reply, em 1 linha, que você está de volta. Não comente o mecanismo da troca nem diga que faltou resumo.]")
-            return 0
-        if RE_STATUS.search(n) and ("cerebro" in n or "respondendo" in n or ("modelo" in n and "ligado" in n)):
-            send_text(chat, status_txt(st)); block("[cérebro: status já enviado]")
-    if st.get("empresa") != "openai":
-        if JOB:
-            send_text(chat, "🟣 A troca pro Claude já terminou. Esta mensagem ficou na fila anterior; envie de novo para ele responder.")
-            raise RuntimeError("Claude requires a real channel turn")
-        return 0
-    if audios:
-        add_context("[cérebro: o dono está no cérebro OpenAI, mas áudio só o Claude ouve. Responda você esta mensagem normalmente e, se fizer sentido, diga que áudio fica com você.]")
-    primeira = not st.get("thread")
-    if ROLLOVER and (st.get("tokens") or 0) > ROLLOVER and st.get("thread"):
-        st["resumo_anterior"] = resumo_thread(st, "Janela cheia: renovando a conversa"); st["thread"] = None; st["tokens"] = 0; save(st); primeira = True; log("rollover")
-    envelope = m.group(0) + ("\n[arquivos anexos (caminhos locais): " + ", ".join(anexos) + "]" if anexos and not imagens else "")
-    ok, resp, thread, tokens, dur, novos = run_codex(st, prefixo(st, primeira) + envelope, imagens)
-    if thread:
-        st["thread"] = thread; save(st)  # preservar continuidade também depois de falha
+def comando(n):
+    """texto normalizado → ('status',) | ('troca', motor, modelo) | None"""
+    if len(n) >= 120: return None
+    if RE_STATUS.search(n) and ("cerebro" in n or "respondendo" in n or ("modelo" in n and "ligado" in n)): return ("status",)
+    for m in RE_CMD.finditer(n):
+        a = alvo(m.group(2))
+        if not a: continue
+        motor, modelo = a
+        if not modelo:  # "muda pra Anthropic no modelo sonnet" → o modelo pode vir depois do alvo
+            for w in n[m.end():].split():
+                b = alvo(w)
+                if b and b[0] == motor and b[1]: modelo = b[1]; break
+        return ("troca", motor, modelo)
+    return None
+
+def trocar(st, motor, modelo):
+    """executa a troca (nos dois sentidos) e devolve o texto pro celular."""
+    if motor not in (st["principal"], st.get("secundario")):
+        if not tem(motor):
+            return (f"🤔 Você só tem o {st['principal'].capitalize()} nesta máquina. Quando assinar o "
+                    f"{'Codex' if motor == 'codex' else 'Claude Code'}, é só rodar o PASSO 7D do instalador que ele entra como secundário, sem desinstalar nada.")
+        st["secundario"] = motor  # instalou depois: entra como secundário na hora
+    if motor == "codex":
+        novo_modelo = MODELOS_CODEX.get(modelo or "sol", MODELOS_CODEX["sol"])
+        mudou_modelo = st["codex"].get("modelo") != novo_modelo
+        st["codex"]["modelo"] = novo_modelo
+        if mudou_modelo: st["codex"]["thread"] = None  # modelo novo = conversa nova (o resumo abaixo mantém o fio)
+    else:
+        pedido = MODELOS_CLAUDE.get(modelo) if modelo else None
+        mudou_modelo = bool(pedido) and st["claude"].get("modelo_pedido") != pedido
+        if pedido: st["claude"]["modelo_pedido"] = pedido
+    if st["ativo"] == motor and not mudou_modelo:
+        return f"{assinatura(motor, st[motor].get('modelo'))} já está ligado. Pode mandar."
+    de = st["ativo"]
+    if de != motor:
+        resumo = resumir(st, de)
+        st["resumo_pendente"] = {"de": assinatura(de, st[de].get("modelo")), "para": motor, "texto": resumo} if resumo else None
+    st["ativo"] = motor; st["desde"] = time.strftime("%d/%m %H:%M"); save(st)
+    log(f"troca {de} → {motor} ({st[motor].get('modelo')})")
+    nome = "OpenAI" if motor == "codex" else "Anthropic"
+    return f"{assinatura(motor, st[motor].get('modelo') or (MODELOS_CLAUDE.get(modelo) if motor == 'claude' else None))} ligado. Sou eu mesmo, só que pensando com a {nome}. Pode continuar de onde parou."
+
+# ---------- entrada da janela ----------
+def responder(msg, batimento=None):
+    """msg = {"chat","mid","user","ts","texto","imagens":[...],"audios":[...],"transcricoes":[...],"arquivos":[...]}
+    → lista de ações pra janela entregar: [("texto", str), ("arquivo", caminho), ...]. Nunca fala com o Telegram."""
+    st = load(); texto = (msg.get("texto") or "").strip(); transc = [t for t in (msg.get("transcricoes") or []) if t]
+    falado = " ".join(transc).strip()
+    n = norm(texto or falado)
+    cmd = comando(n)
+    if cmd:
+        registrar("Dono", texto or falado)
+        if cmd[0] == "status": out = status_txt(st)
+        else: out = trocar(st, cmd[1], cmd[2])
+        registrar("Agente", out); return [("texto", out)]
+    motor = st["ativo"]
+    envelope = (f'<channel source="mestreos-telegram" chat_id="{msg.get("chat")}" message_id="{msg.get("mid")}" user="{msg.get("user", "")}" '
+                f'ts="{msg.get("ts", "")}">{texto}</channel>')
+    if transc: envelope += "\n" + "\n".join(f"[áudio do dono, transcrito: {t}]" for t in transc)
+    if msg.get("audios") and not transc: envelope += "\n[o dono mandou um áudio e a janela não conseguiu transcrever; peça em texto, sem inventar o conteúdo]"
+    if msg.get("arquivos"): envelope += "\n[arquivos anexos (caminhos locais): " + ", ".join(msg["arquivos"]) + "]"
+    prompt = (instrucoes("codex") + "\n" if motor == "codex" else "") + prefixo_continuidade(st, motor) + envelope
+    registrar("Dono", texto + ((" [áudio: " + falado + "]") if falado else "") + (" [foto]" if msg.get("imagens") else ""))
+    t0 = time.time()
+    try: ok, resp, novos, erro = MOTORES[motor](st, prompt, msg.get("imagens") or [], batimento)
+    except Exception as e:
+        ok, resp, novos, erro = False, "", [], f"{type(e).__name__}"
+    save(st)  # thread/sessão preservadas mesmo depois de falha
     if not ok:
-        log(f"codex falhou ({dur}s)")
-        send_text(chat, "⚠️ O cérebro OpenAI parou antes de concluir. Guardei seu pedido; não encaminhei nem repeti ações automaticamente. Vou precisar conferir o resultado antes de tentar de novo.")
-        raise RuntimeError("Codex turn not confirmed")
-    if thread and thread != st.get("thread"): st["thread"] = thread
-    if tokens: st["tokens"] = tokens
-    st["resumo_anterior"] = None; save(st)
-    send_text(chat, resp + "\n\n" + assinatura(st["modelo"]))
-    for a in novos: send_file(chat, a)
-    log(f"respondido por {st['modelo']} em {dur}s (tokens={tokens}, {len(imagens)} img, {len(novos)} arquivos)")
-    block(f"[cérebro OpenAI ({nome(st['modelo'])}) já respondeu esta mensagem no Telegram em {dur:.0f}s]")
+        log(f"{motor} falhou ({time.time() - t0:.0f}s): {erro}")
+        return [("texto", aviso_falha(st, motor, erro)), ("falha", (erro or "")[:200])]  # "falha" = a janela marca o pedido como incerto, nunca repete
+    st["resumo_pendente"] = None; save(st)
+    registrar("Agente", resp)
+    log(f"respondido por {motor} ({st[motor].get('modelo')}) em {time.time() - t0:.0f}s ({len(msg.get('imagens') or [])} img, {len(transc)} áudio, {len(novos)} arquivos)")
+    acoes = [("texto", resp + "\n\n" + assinatura(motor, st[motor].get("modelo")))]
+    acoes += [("arquivo", a) for a in novos]
+    return acoes
 
-# ---------- fila durável (o hook termina imediatamente) ----------
-def worker():
-    q = Queue(STATE)
-    def execute(ident, payload):
-        global JOB, DELIVERED, DELIVERY_FAILED
-        JOB = ident; DELIVERED = 0; DELIVERY_FAILED = False
-        try:
-            main(payload)
-        except SystemExit:
-            pass
-        except Exception:
-            if not DELIVERED:
-                send_text(chat_id_dono(), "⚠️ O motor interrompeu antes de concluir. Seu pedido ficou guardado para conferência; não repeti a ação.")
-            return "uncertain"
-        finally:
-            JOB = None
-        return "completed" if DELIVERED and not DELIVERY_FAILED else "uncertain"
-    def recovered(ident):
-        send_text(chat_id_dono(), "⚠️ Uma resposta foi interrompida quando o computador parou. Guardei o pedido e vou precisar conferir o que foi feito antes de repetir.")
-    q.drain(execute, recovered)
-
-
-def dispatch():
-    try: d = json.load(sys.stdin)
-    except Exception: return 0
-    prompt = d.get("prompt") or ""
-    m = re.search(r'<channel source="(?:plugin:)?telegram[^>]*chat_id="(\d+)"[^>]*message_id="(\d+)"[^>]*>(.*?)</channel>', prompt, re.S)
-    if not m or not chat_id_dono() or m.group(1) != chat_id_dono(): return 0
-    if DRY: return main(d)  # testes antigos; fila possui suíte própria com subprocessos reais
-    if re.search(r'attachment_kind="(?:voice|audio)"|\(voice message\)', m.group(0)) or any(x in prompt.lower() for x in AUD):
-        add_context("[Áudio: responda pelo Claude usando o anexo real. Não trate '(voice message)' como conteúdo nem prometa encaminhamento.]")
-    q = Queue(STATE)
-    n = norm(m.group(3)); mt = RE_TROCA.search(n)
-    switch = mt and (alvo_modelo(mt.group(2)) in MODELOS or mt.group(2) in MODELOS.values() or mt.group(1) in ("troca", "trocar", "muda", "mudar"))
-    command = len(n) < 120 and (switch or RE_VOLTA.search(n) or RE_STATUS.search(n))
-    with q.connect() as db:
-        pending = db.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone()
-    if load().get("empresa") != "openai" and not command and not pending:
-        handoff = os.path.join(STATE, "claude-handoff.json")
-        if os.path.exists(handoff):
-            text = json.load(open(handoff, encoding="utf-8")); os.remove(handoff); add_context(text)
-        return main(d)
-    ident = m.group(1) + ":" + m.group(2)
-    fresh = q.enqueue(ident, d)  # commit em disco ANTES do ACK do hook
-    try:
-        opts = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == "nt" else {"start_new_session": True}
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "--worker"],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         cwd=OS_DIR, close_fds=True, **opts)
-    except Exception:
-        log("worker não iniciou; pedido permanece queued para recuperação")
-        send_text(m.group(1), "⚠️ Guardei seu pedido, mas o motor não iniciou. Ele ficou pendente para recuperação.")
-    block("[pedido salvo na fila; resposta ainda pendente]" if fresh else "[mensagem duplicada; pedido original preservado]")
-
-# ---------- self-test (sem Telegram, sem Codex): python3 cerebro.py --teste ----------
+# ---------- self-test (sem Telegram, sem IA): python3 cerebro.py --teste ----------
 def teste():
     import tempfile
-    T = tempfile.mkdtemp(); os.environ["MESTREOS_CEREBRO_DRYRUN"] = "1"; os.environ["MESTREOS_CEREBRO_STATE"] = os.path.join(T, "s"); os.environ["TELEGRAM_CHAT_ID"] = "111"
-    me = os.path.abspath(__file__); ok = 0; fail = 0
-    def ch(c, mid, t): return json.dumps({"prompt": f'<channel source="plugin:telegram@claude-plugins-official" chat_id="{c}" message_id="{mid}" user="x" ts="t">{t}</channel>'})
-    def run(inp, fake=None):
-        env = dict(os.environ); env.pop("MESTREOS_CEREBRO_FAKE_CODEX", None)
-        if fake is not None: env["MESTREOS_CEREBRO_FAKE_CODEX"] = fake
-        r = subprocess.run([sys.executable, me], input=inp, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env); return r.stdout, r.stderr
-    def st(): return json.load(open(os.path.join(T, "s", "cerebro.json"))) if os.path.exists(os.path.join(T, "s", "cerebro.json")) else {}
+    T = tempfile.mkdtemp(); os.environ["MESTREOS_CEREBRO_STATE"] = os.path.join(T, "s")
+    me = os.path.abspath(__file__); ok = fail = 0
+    def run(texto, fake_codex=None, fake_claude=None, principal="claude", secundario="codex", audios=None, transc=None):
+        env = dict(os.environ); env.pop("MESTREOS_CEREBRO_FAKE_CODEX", None); env.pop("MESTREOS_CEREBRO_FAKE_CLAUDE", None)
+        env["MESTREOS_CLAUDE_BIN"] = os.path.join(T, "nao-existe-claude"); env["MESTREOS_CODEX_BIN"] = os.path.join(T, "nao-existe-codex")  # nunca chama IA de verdade
+        if fake_codex is not None: env["MESTREOS_CEREBRO_FAKE_CODEX"] = fake_codex
+        if fake_claude is not None: env["MESTREOS_CEREBRO_FAKE_CLAUDE"] = fake_claude
+        msg = {"chat": "111", "mid": str(int(time.time() * 1000) % 100000), "user": "x", "ts": "t", "texto": texto, "imagens": [], "audios": audios or [], "transcricoes": transc or []}
+        r = subprocess.run([sys.executable, me, "--responder", principal, secundario or "-"], input=json.dumps(msg), capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+        try: return json.loads(r.stdout.strip().splitlines()[-1])
+        except Exception: return {"erro": r.stderr[-300:]}
+    def st():  # encoding explícito: no Windows o open() sem encoding lê em cp1252 e quebra no emoji da assinatura
+        p = os.path.join(T, "s", "cerebro.json")
+        if not os.path.exists(p): return {}
+        with open(p, encoding="utf-8") as f: return json.load(f)
     def chk(nome, cond):
         nonlocal ok, fail
         if cond: ok += 1; print("✅", nome)
         else: fail += 1; print("❌", nome)
-    o, e = run('{"prompt":"oi digitado"}');                        chk("1 prompt sem canal passa direto", not o)
-    o, e = run(ch(999, 1, "troca pro sol"));                        chk("2 outro chat passa direto", not o)
-    o, e = run(ch(111, 2, "oi tudo bem"));                          chk("3 modo Claude: mensagem normal passa", not o)
-    o, e = run(ch(111, 3, "troca pro codex"));                      chk("4 'troca pro codex' = Sol, bloqueia e avisa", '"block"' in o and "sendMessage" in e and st().get("modelo") == "gpt-5.6-sol")
-    o, e = run(ch(111, 4, "qual é a capital de Minas?"), "BH");     chk("5 modo OpenAI: resposta (fake) entregue com assinatura e bloqueio", '"block"' in o and "BH" in e and "Sol" in e)
-    o, e = run(ch(111, 5, "salvar"), "salvo");                      chk("6 'salvar' vai pro cérebro ativo", '"block"' in o and "salvo" in e)
-    o, e = run(ch(111, 6, "qual cérebro tá ligado?"));              chk("7 status responde", '"block"' in o and "OpenAI" in e)
-    o, e = run(ch(111, 7, "troca pro plutao"));                     chk("8 modelo desconhecido avisa e mantém", '"block"' in o and "Não achei" in e and st().get("modelo") == "gpt-5.6-sol")
-    o, e = run(ch(111, 8, "liga o astra"), "x");                    chk("9 Sol → Astra", st().get("modelo") == "gpt-6-astra")
-    o, e = run(ch(111, 9, "volta pro claude"));                     chk("10 volta: não bloqueia, injeta resumo, estado anthropic", "additionalContext" in o and '"block"' not in o and st().get("empresa") == "anthropic")
-    o, e = run(ch(111, 10, "e aí"));                                chk("11 de volta ao Claude: passa", not o)
-    o, e = run(ch(111, 11, "Troca pro Codecs."));                    chk("12 ditado 'Codecs' → Codex/Sol", st().get("modelo") == "gpt-5.6-sol")
-    o, e = run(ch(111, 12, "Volta para o Claudio"));                 chk("13 ditado 'Claudio' → volta pro Claude", "additionalContext" in o and st().get("empresa") == "anthropic")
-    o, e = run(ch(111, 13, "volta pro codex"));                      chk("14 'volta pro codex' = troca pro Sol", '"block"' in o and st().get("modelo") == "gpt-5.6-sol")
-    o, e = run(ch(111, 14, "volta pro claude"));                     chk("15 volta sem conversa lá: contexto curto, sem resumo", "additionalContext" in o and "sem conversar" in o and st().get("empresa") == "anthropic")
+    def txt(r): return "".join(a[1] for a in r.get("acoes", []) if a[0] == "texto")
+    subprocess.run([sys.executable, me, "--motores", "claude", "codex"], capture_output=True, env=dict(os.environ))
+    r = run("oi tudo bem", fake_claude="tudo ótimo");                          chk("1 principal Claude responde e assina 🟣", "tudo ótimo" in txt(r) and "🟣" in txt(r) and st()["ativo"] == "claude")
+    if "tudo ótimo" not in txt(r): print("   detalhe:", json.dumps(r, ensure_ascii=False)[:600])
+    r = run("qual cérebro tá ligado?");                                          chk("2 status sem chamar motor", "Cérebro ligado" in txt(r) and "Claude" in txt(r))
+    r = run("troca pro codex", fake_claude="resumo do claude");                  chk("3 'troca pro codex' = Sol; resumo do Claude fica pendente", st()["ativo"] == "codex" and st()["codex"]["modelo"] == "gpt-5.6-sol" and (st().get("resumo_pendente") or {}).get("para") == "codex")
+    r = run("qual é a capital de Minas?", fake_codex="BH");                      chk("4 Codex responde com assinatura ☀️ e limpa o resumo pendente", "BH" in txt(r) and "Sol" in txt(r) and not st().get("resumo_pendente"))
+    r = run("salvar", fake_codex="salvo");                                       chk("5 'salvar' vai pro cérebro ativo (Codex)", "salvo" in txt(r))
+    r = run("liga o astra", fake_codex="x");                                     chk("6 Sol → Astra (thread nova, mesmo motor)", st()["codex"]["modelo"] == "gpt-6-astra" and st()["ativo"] == "codex" and st()["codex"]["thread"] is None)
+    r = run("e agora?", fake_codex="astra na área");                             chk("6b Astra responde e abre thread", "astra na área" in txt(r) and st()["codex"]["thread"])
+    r = run("Volta para o Claudio", fake_codex="resumo do astra");               chk("7 ditado 'Claudio' → volta pro Claude com resumo do Codex", st()["ativo"] == "claude" and (st().get("resumo_pendente") or {}).get("para") == "claude")
+    r = run("e aí", fake_claude="segui");                                        chk("8 Claude retoma a sessão (mesma sessão) e responde", "segui" in txt(r) and st()["claude"]["sessao"] == "fake-sessao")
+    r = run("Muda pra Anthropic no modelo sonnet 5 alto", fake_claude="ok");    chk("9 'muda pra Anthropic … sonnet' já no Claude = troca de modelo, não cai no Codex", st()["ativo"] == "claude" and st()["claude"].get("modelo_pedido") == "sonnet")
+    r = run("Troca pro Codecs.", fake_claude="r");                               chk("10 ditado 'Codecs' → Codex/Sol", st()["ativo"] == "codex" and st()["codex"]["modelo"] == "gpt-5.6-sol")
+    r = run("troca pro plutao", fake_codex="?");                                 chk("11 alvo desconhecido = mensagem normal (vai pro motor ativo)", "?" in txt(r) and st()["ativo"] == "codex")
+    r = run("liga o carro da garagem", fake_codex="carro");                      chk("12 'liga o carro' não é troca", "carro" in txt(r) and st()["ativo"] == "codex")
+    r = run("", fake_codex="ouvi", audios=["/x/a.oga"], transc=["troca pro claude"]); chk("13 comando FALADO (transcrito pela janela) troca de cérebro", st()["ativo"] == "claude")
+    r = run("", fake_claude="não ouvi", audios=["/x/a.oga"]);                    chk("14 áudio sem transcrição avisa o motor, não inventa conteúdo", "não ouvi" in txt(r))
+    r = run("usa o codigo que te mandei", fake_claude="usei");                   chk("14b 'usa o codigo' não é troca pro Codex", "usei" in txt(r) and st()["ativo"] == "claude")
+    r = run("oi", fake_claude=None, principal="claude", secundario="codex");     chk("14c motor que falha: aviso honesto + ação 'falha' (pedido vira incerto)", any(a[0] == "falha" for a in r.get("acoes", [])) and "parou antes de concluir" in txt(r))
+    # aluno só-Codex: principal codex, sem secundário
+    subprocess.run([sys.executable, me, "--motores", "codex", "-"], capture_output=True, env=dict(os.environ))
+    r = run("oi", fake_codex="opa", principal="codex", secundario=None);          chk("15 aluno só-Codex: Codex é o principal e responde", "opa" in txt(r) and st()["ativo"] == "codex")
+    r = run("volta pro claude", principal="codex", secundario=None);            chk("16 só-Codex pede Claude: avisa que não tem, sem quebrar", "só tem o Codex" in txt(r) and st()["ativo"] == "codex")
     print(f"----- {ok} ok · {fail} falhas"); return 0 if fail == 0 else 1
 
 if __name__ == "__main__":
     if "--status" in sys.argv:
-        with Queue(STATE).connect() as db:
-            counts = dict(db.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall())
-        print(json.dumps({"state_dir": STATE, "jobs": counts}, ensure_ascii=False)); sys.exit(0)
+        st = load()
+        with Queue(STATE).connect() as db: counts = dict(db.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall())
+        print(json.dumps({"state_dir": STATE, "ativo": st["ativo"], "principal": st["principal"], "secundario": st.get("secundario"), "jobs": counts}, ensure_ascii=False)); sys.exit(0)
+    if "--motores" in sys.argv:  # cerebro.py --motores <principal> <secundario|->  (o instalador chama no 7D)
+        i = sys.argv.index("--motores"); principal = sys.argv[i + 1]; sec = sys.argv[i + 2] if len(sys.argv) > i + 2 else "-"
+        st = load(); st["principal"] = principal; st["secundario"] = None if sec == "-" else sec
+        st["ativo"] = principal  # comando de instalação: liga o principal (o aluno troca por frase depois)
+        save(st); print(f"principal={principal} secundario={st['secundario']} ativo={st['ativo']}"); sys.exit(0)
+    if "--responder" in sys.argv:  # usado pelo --teste (processo separado, estado isolado): stdin = msg JSON
+        i = sys.argv.index("--responder")
+        if len(sys.argv) > i + 2 and not os.path.exists(SF):
+            st = novo_estado(sys.argv[i + 1], None if sys.argv[i + 2] == "-" else sys.argv[i + 2]); save(st)
+        msg = json.load(sys.stdin); out = responder(msg)
+        print(json.dumps({"acoes": out}, ensure_ascii=False)); sys.exit(0)
     if "--teste" in sys.argv: sys.exit(teste())
-    try: sys.exit((worker() if "--worker" in sys.argv or "--recover" in sys.argv else dispatch()) or 0)
-    except SystemExit: raise
-    except Exception as e: log(f"exceção: {e!r}"); sys.exit(0)
+    print("uso: cerebro.py --teste | --status | --motores <principal> <secundario|->   (a janela do bot é telegram_janela.py)"); sys.exit(2)
