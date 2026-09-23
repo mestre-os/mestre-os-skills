@@ -1,5 +1,12 @@
 # Changelog — MestreOS Skills
 
+## 2026-09-23: Telegram 4.1.2 (emoji partido no plugin do ramo Claude)
+
+- **Resposta longa podia chegar pela metade no ramo Claude (7A).** O plugin oficial corta respostas acima de 4096 por posição; se o corte cai no meio de um emoji, o Telegram recusa aquele pedaço inteiro. O `telegram-plugin-remedio.py` ganhou o 2º remédio: recua o corte quando ele partiria o emoji.
+- Cada remédio só entra se o trecho exato for reconhecido; conserto equivalente que já exista não é duplicado; arquivo com fim de linha do Windows continua igual fora das linhas remediadas, e reverter devolve o arquivo idêntico.
+- **Quem já instalou o ramo Claude:** o prompt de atualização manda rodar o remédio de novo e conferir `--check` (✓ nos dois), com o bot ocioso.
+- Provas offline: 72 verificações em macOS e em Windows 11 ARM; remédio testado numa cópia do plugin atual e do mais recente.
+
 ## 2026-09-23: Telegram 4.1.1 (correções do teste real no celular)
 
 - **Foto e áudio sumiam sem aviso.** O download do anexo quebrava por dentro e o erro era engolido: a mensagem chegava ao cérebro sem a foto ou sem o áudio. Corrigido, com registro no log. Um erro do servidor não vira mais "arquivo baixado".

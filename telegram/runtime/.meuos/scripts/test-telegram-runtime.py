@@ -304,7 +304,7 @@ class PluginRemedioTests(unittest.TestCase):
     def test_plugin_patch_idempotent_and_revert_preserves_new_code(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
         server.parent.mkdir(parents=True)
-        original = '        const text = args.text as string\n'
+        original = '        const text = args.text as string\n' + '  while (rest.length > limit) {\n    out.push(rest.slice(0, cut))\n  }\n'
         server.write_text(original, encoding='utf-8')
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
@@ -316,6 +316,56 @@ class PluginRemedioTests(unittest.TestCase):
         with server.open('a', encoding='utf-8') as f: f.write('// unrelated upstream fix\n')
         self.assertEqual(run('--revert').returncode, 0)
         self.assertEqual(server.read_text(), original + '// unrelated upstream fix\n')
+
+    def test_both_remedies_applied_and_check_needs_both(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
+        server.parent.mkdir(parents=True)
+        server.write_bytes(b'        const text = args.text as string\n    out.push(rest.slice(0, cut))\n')  # LF explícito (write_text vira CRLF no Windows)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        s = server.read_text(encoding='utf-8')
+        self.assertIn('MESTREOS-REMEDIO-UNDEFINED', s); self.assertIn('MESTREOS-REMEDIO-EMOJI', s)
+        self.assertIn('rest.charCodeAt(cut - 1) >= 0xd800', s)
+        self.assertNotIn(b'\r\n', server.read_bytes())  # arquivo LF continua LF (o de CRLF tem teste próprio)
+
+    def test_crlf_file_keeps_crlf_and_revert_is_byte_identical(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/win/server.ts'
+        server.parent.mkdir(parents=True)
+        original = b'// cabecalho\r\n        const text = args.text as string\r\n    out.push(rest.slice(0, cut))\r\n// fim\r\n'
+        server.write_bytes(original)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        b = server.read_bytes()
+        self.assertIn(b'MESTREOS-REMEDIO-EMOJI', b); self.assertIn(b'MESTREOS-REMEDIO-UNDEFINED', b)
+        self.assertEqual(b.count(b'\n'), b.count(b'\r\n'))  # nenhuma linha virou LF
+        self.assertTrue(b.startswith(b'// cabecalho\r\n') and b.endswith(b'// fim\r\n'))
+        self.assertEqual(subprocess.run(cmd + ['--revert'], env=env, capture_output=True).returncode, 0)
+        self.assertEqual(server.read_bytes(), original)
+
+    def test_equivalent_owner_fix_is_not_stacked(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/dono/server.ts'
+        server.parent.mkdir(parents=True)
+        dono = ('        const text = (args.text ?? (args as Record<string, unknown>).message) as string // PATCH DO DONO\n'
+                '    if (cut > 1 && rest.charCodeAt(cut - 1) >= 0xd800 && rest.charCodeAt(cut - 1) <= 0xdbff) cut-- // PATCH DO DONO\n'
+                '    out.push(rest.slice(0, cut))\n')
+        server.write_text(dono, encoding='utf-8')
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        self.assertEqual(server.read_text(encoding='utf-8'), dono)
+        self.assertEqual(subprocess.run(cmd + ['--check'], env=env, capture_output=True).returncode, 0)
+
+    def test_partial_plugin_applies_known_and_flags_unknown(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/partial/server.ts'
+        server.parent.mkdir(parents=True); server.write_text('        const text = args.text as string\n', encoding='utf-8')
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        r = subprocess.run(cmd, env=env, capture_output=True, encoding='utf-8')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('MESTREOS-REMEDIO-UNDEFINED', server.read_text(encoding='utf-8'))
+        self.assertNotEqual(subprocess.run(cmd + ['--check'], env=env, capture_output=True).returncode, 0)
 
     def test_unknown_plugin_version_is_not_modified(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/new/server.ts'
