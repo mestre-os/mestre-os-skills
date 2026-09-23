@@ -252,7 +252,7 @@ def receber(update):
     d = dono()
     if not d: parear(chat, texto); return
     if chat != d: log(f"ignorado chat {chat}"); return
-    reagir(chat, mid)
+    reagir(chat, mid, "✍" if (msg.get("voice") or msg.get("audio")) else "👀")  # 👂 não existe pra bot no Telegram (REACTION_INVALID)
     imgs, auds, docs = anexos(msg)
     if (msg.get("photo") or msg.get("voice") or msg.get("audio") or msg.get("document")) and not (imgs or auds or docs):
         log(f"anexo {mid}: download falhou"); texto = (texto + "\n\n" if texto else "") + AVISO_ANEXO
@@ -263,39 +263,114 @@ def receber(update):
     if q.enqueue(f"{chat}:{mid}", payload): log(f"na fila {mid} ({'áudio ' if auds else ''}{'foto ' if imgs else ''}{len(texto)} chars)")
 
 # ---------- execução (um por vez, em ordem; recibo por envio) ----------
+# ---------- porta: junta a rajada e espera o anexo prometido (23/09/26, pedido do dono) ----------
+# Antes: áudio "vou te mandar a foto" + foto viravam 2 pedidos e 2 respostas ("vou aguardar a foto", depois outra).
+# Agora: texto puro sem promessa sai na hora (expresso); áudio/anexo esperam PORTA_RAJADA por mais mensagens da rajada;
+# promessa de anexo sem anexo espera até PORTA_PROMESSA; tudo vira UM pedido ao cérebro. Promessa não cumprida vira nota.
+PORTA_RAJADA = float(os.environ.get("MESTREOS_PORTA_RAJADA_S", "2"))
+PORTA_PROMESSA = float(os.environ.get("MESTREOS_PORTA_PROMESSA_S", "60"))
+# objeto LOGO depois do verbo (só recheio curto e artigo no meio): "vou passar no banco pagar o boleto" NÃO é promessa
+RE_PROMESSA = re.compile(r"(?<!\bme\s)(?<!\bnos\s)\b(mandar|mando|mandando|enviar|envio|enviando|encaminhar|encaminho|passar|passo|tirar|tiro|segue|seguem)\b(?:\s+(?:te|lhe|aqui|já|ja|agora|logo|rapidinho|pra|para|você|voce|vc|ti|daqui|a|pouco|em|seguida|também|tambem)){0,3}(?:\s+(?:a|o|as|os|um|uma|uns|umas|essa|esse|essas|esses|esta|este|aquela|aquele|minha|meu|minhas|meus|sua|seu|mais|outra|outro|umas?)){0,2}\s+(fotos?|imagens?|imagem|prints?|screenshots?|captura|arquivos?|pdfs?|documentos?|planilhas?|v[ií]deos?|anexos?|contratos?|comprovantes?|boletos?|notas?)\b", re.I)
+ESPERANDO = threading.Event()  # ligado = esperando anexo prometido: o "digitando" pausa (não é hora de fingir que tá escrevendo)
+ABSORVIDOS = []
+
+def promessa(p):
+    m = RE_PROMESSA.search((p.get("texto") or "") + " " + " ".join(t for t in (p.get("transcricoes") or []) if t))
+    return m.group(2).lower() if m else None
+
+def tem_anexo(p):
+    return bool(p.get("imagens") or p.get("arquivos"))
+
+def ouvir(p):
+    if p.get("audios") and tem_stt() and not p.get("transcricoes"):
+        p["transcricoes"] = [transcrever(a) for a in p["audios"]]
+    return p
+
+def absorver(chat, ident):
+    """Pedidos seguintes do mesmo dono, ainda na fila, entram neste. Ficam 'absorvido' (a fila não os pega de novo) até a resposta;
+    queda no meio = a recuperação do pedido principal fecha todos juntos, com UM aviso só (dado continua no SQLite)."""
+    novos = []
+    with Queue(STATE).connect() as db:
+        for r in db.execute("SELECT id, payload FROM jobs WHERE status='queued' AND id LIKE ? AND id != ? ORDER BY seq", (f"{chat}:%", ident)).fetchall():
+            if db.execute("UPDATE jobs SET status='absorvido', detail=?, updated=? WHERE id=? AND status='queued'", (f"absorvido em {ident}", time.time(), r["id"])).rowcount:
+                ABSORVIDOS.append(r["id"]); novos.append(json.loads(r["payload"]))
+    return novos
+
+def porta(ident, payload):
+    chat = payload["chat"]; itens = [payload]
+    prom = None if tem_anexo(payload) else promessa(payload)
+    if not (payload.get("audios") or tem_anexo(payload) or prom): return payload  # expresso
+    prom_em = time.time()
+    def aguarda(p):
+        ESPERANDO.set(); reagir(chat, p.get("mid"), "🫡")
+    if prom: aguarda(payload)
+    prazo = (prom_em + PORTA_PROMESSA) if prom else time.time() + PORTA_RAJADA
+    while time.time() < prazo:
+        for p in absorver(chat, ident):
+            itens.append(ouvir(p))
+            if tem_anexo(p): prom = None; ESPERANDO.clear()
+            elif not prom and not any(tem_anexo(i) for i in itens):
+                prom = promessa(p)
+                if prom: prom_em = time.time(); aguarda(p)
+            prazo = (prom_em + PORTA_PROMESSA) if prom else time.time() + PORTA_RAJADA
+        time.sleep(0.3)
+    ESPERANDO.clear()
+    if len(itens) == 1 and not prom: return payload
+    linhas = [f"[pacote: {len(itens)} mensagem(ns) que o dono mandou em sequência; responda TUDO numa resposta só]"]
+    for p in itens:
+        tipo = " (áudio, transcrição abaixo)" if p.get("audios") else " (foto)" if p.get("imagens") else " (arquivo)" if p.get("arquivos") else ""
+        linhas.append(f"— msg {p.get('mid')}{tipo}: {p.get('texto') or ''}".rstrip())
+    if prom:
+        linhas.append(f"[nota da janela: ele disse que ia mandar {prom} e nada chegou em {PORTA_PROMESSA:.0f} s (pode ter esquecido, sido interrompido "
+                      f"ou o envio falhou). Responda o resto e avise, curto, que está aguardando o anexo prometido ({prom}).]")
+    ult = itens[-1]
+    return {**ult, "texto": "\n".join(linhas),
+            "imagens": [x for p in itens for x in (p.get("imagens") or [])], "audios": [x for p in itens for x in (p.get("audios") or [])],
+            "transcricoes": [x for p in itens for x in (p.get("transcricoes") or [])], "arquivos": [x for p in itens for x in (p.get("arquivos") or [])]}
+
 def executar(ident, payload):
     global JOB, ENTREGUE, FALHOU
-    JOB = ident; ENTREGUE = 0; FALHOU = False; chat = payload["chat"]
+    JOB = ident; ENTREGUE = 0; FALHOU = False; chat = payload["chat"]; ABSORVIDOS.clear()
     parar = threading.Event()
     def batimento():
         while not parar.is_set():
-            api("sendChatAction", {"chat_id": chat, "action": "typing"}, max_time=10); parar.wait(4)
+            if not ESPERANDO.is_set(): api("sendChatAction", {"chat_id": chat, "action": "typing"}, max_time=10)
+            parar.wait(4)
     threading.Thread(target=batimento, daemon=True).start()
+    status = "uncertain"
     try:
         if payload.get("audios"):
             if tem_stt():
-                payload["transcricoes"] = [transcrever(a) for a in payload["audios"]]
+                ouvir(payload)
                 if not any(payload["transcricoes"]): log(f"transcrição vazia {ident}")
             else:
                 enviar_texto(chat, "🎧 Recebi seu áudio, mas ainda não consigo ouvir: não tem transcrição configurada neste computador. Manda em texto que eu respondo. (Pra eu ouvir: uma chave gratuita da Groq no arquivo do token, linha GROQ_API_KEY=…)")
-                if not (payload.get("texto") or payload.get("imagens")): return "completed"
+                if not (payload.get("texto") or payload.get("imagens")): status = "completed"; return status
+        payload = porta(ident, payload)
+        if ABSORVIDOS: log(f"porta: {ident} juntou {len(ABSORVIDOS)} mensagem(ns) da rajada")
         acoes = cerebro.responder(payload)
         incerto = False
         for tipo, valor in acoes:
             if tipo == "texto": enviar_texto(chat, valor)
             elif tipo == "arquivo": enviar_arquivo(chat, valor)
+            elif tipo == "reagir": reagir(chat, payload.get("mid"), valor)
             elif tipo == "falha": incerto = True
-        if incerto: return "uncertain"
-        return "completed" if ENTREGUE and not FALHOU else "uncertain"
+        status = "uncertain" if incerto else ("completed" if ENTREGUE and not FALHOU else "uncertain")
+        return status
     except Exception as e:
         log(f"execução {ident}: {e!r}")
         if not ENTREGUE: enviar_texto(chat, "⚠️ O motor interrompeu antes de concluir. Seu pedido ficou guardado para conferência; não repeti a ação.")
         return "uncertain"
     finally:
-        parar.set(); JOB = None
+        parar.set(); ESPERANDO.clear(); JOB = None
+        for a in ABSORVIDOS: Queue(STATE).finish(a, status, f"absorvido em {ident}")
 
 def recuperado(ident):
-    enviar_texto(dono(), "⚠️ Uma resposta foi interrompida quando a janela fechou. Guardei o pedido e vou precisar conferir o que foi feito antes de repetir.")
+    with Queue(STATE).connect() as db:  # mensagens que a porta juntou neste pedido caem junto, sem aviso repetido
+        juntas = db.execute("UPDATE jobs SET status='uncertain', detail=?, updated=? WHERE status='absorvido' AND detail=?",
+                            (f"interrompido junto com {ident}", time.time(), f"absorvido em {ident}")).rowcount
+    extra = f" ({juntas + 1} mensagens suas estavam juntas nesse pedido)" if juntas else ""
+    enviar_texto(dono(), f"⚠️ Uma resposta foi interrompida quando a janela fechou{extra}. Guardei o pedido e vou precisar conferir o que foi feito antes de repetir.")
 
 def executor_loop(parar):
     q = Queue(STATE)
@@ -449,6 +524,45 @@ def teste():
     api = api_fake([{"ok": False, "error_code": 400, "description": "Bad Request"}]); ok400 = enviar_texto("555", "oi")
     api = _api
     chk("17 429 entrega na 2ª tentativa; 400 não repete e fica sem confirmação", ok429 and n429 == 2 and not ok400 and len(chamadas) == 1)
+    # ---- porta (23/09/26): rajada, promessa de anexo, reação por tipo e pertinente ----
+    global PORTA_RAJADA, PORTA_PROMESSA
+    PORTA_RAJADA, PORTA_PROMESSA = 0.4, 1.5
+    cerebro.FAKE_CLAUDE = "resposta do claude"; os.environ["MESTREOS_CEREBRO_FAKE_CLAUDE"] = "resposta do claude"
+    tem_stt = lambda: True; transcrever = lambda p: "olha só isso aqui"
+    def reacoes(mid): return [json.loads(f["reaction"])[0]["emoji"] for m, f, _ in DRY_API if m == "setMessageReaction" and str(f.get("message_id")) == str(mid)]
+    def dono_disse(): return [json.loads(l)["texto"] for l in open(cerebro.CONVERSA, encoding="utf-8") if l.strip() and json.loads(l)["quem"] == "Dono"][-1]
+    receber({"update_id": 20, "message": {"message_id": 200, "chat": {"id": 555}, "voice": {"file_id": "v200"}}})
+    chk("18 reação por tipo: áudio ganha ✍ na chegada (👂 não existe pra bot)", reacoes(200)[:1] == ["✍"])
+    q.drain(executar, recuperado)
+    receber({"update_id": 21, "message": {"message_id": 210, "chat": {"id": 555}, "photo": [{"file_id": "p210"}], "caption": "olha"}})
+    receber({"update_id": 22, "message": {"message_id": 211, "chat": {"id": 555}, "text": "o que acha?"}})
+    n0 = len(enviados()); q.drain(executar, recuperado)
+    chk("19 rajada foto + texto = UMA resposta, e o 2º pedido fecha como absorvido", len(enviados()) - n0 == 1 and q.status("555:211") == "completed" and "pacote: 2" in dono_disse())
+    receber({"update_id": 23, "message": {"message_id": 220, "chat": {"id": 555}, "text": "vou te mandar a foto do contrato"}})
+    threading.Timer(0.6, lambda: receber({"update_id": 24, "message": {"message_id": 221, "chat": {"id": 555}, "photo": [{"file_id": "p221"}]}})).start()
+    n0 = len(enviados()); q.drain(executar, recuperado)
+    chk("20 promessa cumprida: segura, reage 🫡 e responde UMA vez com a foto, sem nota", len(enviados()) - n0 == 1 and "🫡" in reacoes(220) and "nota da janela" not in dono_disse() and q.status("555:221") == "completed")
+    t0 = time.time(); receber({"update_id": 25, "message": {"message_id": 230, "chat": {"id": 555}, "text": "vou te enviar o pdf"}}); q.drain(executar, recuperado)
+    chk("21 promessa esquecida: espera o prazo e avisa que está aguardando o pdf", time.time() - t0 >= PORTA_PROMESSA and "aguardando o anexo prometido (pdf)" in dono_disse())
+    t0 = time.time(); receber({"update_id": 26, "message": {"message_id": 240, "chat": {"id": 555}, "text": "me manda a foto do relatório"}}); q.drain(executar, recuperado)
+    chk("22 'me manda a foto' é pedido PRA mim: sai na hora (expresso)", time.time() - t0 < PORTA_RAJADA and "pacote" not in dono_disse())
+    cerebro.FAKE_CLAUDE = "[reagir:❤️] valeu demais"
+    receber({"update_id": 27, "message": {"message_id": 250, "chat": {"id": 555}, "text": "obrigado, valeu"}}); q.drain(executar, recuperado)
+    chk("23 reação pertinente: [reagir:❤️] vira ❤ na mensagem e some do texto", reacoes(250)[-1:] == ["❤"] and enviados()[-1].startswith("valeu demais"))
+    sim = ["vou te mandar uma foto", "te mando já já a foto", "segue o print", "vou te enviar o pdf do boleto", "deixa eu tirar uma foto aqui",
+           "vou mandar aqui pra você a foto", "já te mando o comprovante", "vou encaminhar o arquivo"]
+    nao = ["vou passar no mercado comprar a nota fiscal do gás", "vou passar no banco pagar o boleto", "mandei a foto ontem",
+           "manda a foto pra ela", "você pode me mandar a foto?", "me manda o print", "vou tirar férias e mandar notícias"]
+    chk("24 promessa: acerta as reais e não cai em 'vou passar no banco pagar o boleto' (achado do juiz)",
+        all(promessa({"texto": f}) for f in sim) and not any(promessa({"texto": f}) for f in nao))
+    q.enqueue("555:260", {"chat": "555", "mid": "260", "texto": "vou te mandar a foto"}); q.enqueue("555:261", {"chat": "555", "mid": "261", "texto": "(foto)"})
+    with q.connect() as db:
+        db.execute("UPDATE jobs SET status='running' WHERE id='555:260'")
+        db.execute("UPDATE jobs SET status='absorvido', detail='absorvido em 555:260' WHERE id='555:261'")
+    n0 = len(enviados()); q.drain(executar, recuperado)
+    avisos = [t for t in enviados()[n0:] if "interrompida" in t]
+    chk("25 queda no meio de um pacote: UM aviso só (com '2 mensagens') e os dois pedidos ficam incertos, sem repetir",
+        len(avisos) == 1 and "2 mensagens" in avisos[0] and q.status("555:260") == "uncertain" and q.status("555:261") == "uncertain")
     print(f"----- {ok} ok · {fail} falhas"); return 0 if fail == 0 else 1
 
 if __name__ == "__main__":

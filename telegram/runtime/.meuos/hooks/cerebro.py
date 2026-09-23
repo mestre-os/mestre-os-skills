@@ -130,7 +130,9 @@ def instrucoes(motor):
             f"arquivos que a pergunta pedir; grave feedback/decisão lá também). Arquivo que você quiser mandar pro celular: salve em {out_dir}/ "
             f"(tudo que aparecer lá eu envio). Skill `salvar` e os outros ritos do OS valem aqui igual. Você NÃO consegue trocar de cérebro: "
             f"se ele pedir, responda só: 'pra trocar, manda: troca pro Codex' (ou 'volta pro Claude'). Seja rápido: não varra pastas nem skills "
-            f"sem necessidade.]")
+            f"sem necessidade. Reação: a janela já pôs ✍ (áudio) ou 👀 na mensagem dele; se couber uma reação pertinente, comece a resposta com "
+            f"[reagir:EMOJI] usando um destes: ❤ agradecimento, 🔥 empolgação, 🙏 desculpa, 👍 ok, 🤝 combinado, 😁 graça, 🎉 comemoração. "
+            f"Pacote de várias mensagens = uma resposta só.]")
 
 def prefixo_continuidade(st, motor):
     p = ""
@@ -363,6 +365,9 @@ def trocar(st, motor, modelo):
     return f"{assinatura(motor, st[motor].get('modelo') or (MODELOS_CLAUDE.get(modelo) if motor == 'claude' else None))} ligado. Sou eu mesmo, só que pensando com a {nome}. Pode continuar de onde parou."
 
 # ---------- entrada da janela ----------
+REACOES_OK = {"❤", "🔥", "🙏", "👍", "🤝", "😁", "🎉", "👌", "💯", "🫡", "🤔"}
+RE_REAGIR = re.compile(r"^\s*\[reagir:\s*([^\]\s]{1,4})\s*\]\s*")
+
 def responder(msg, batimento=None):
     """msg = {"chat","mid","user","ts","texto","imagens":[...],"audios":[...],"transcricoes":[...],"arquivos":[...]}
     → lista de ações pra janela entregar: [("texto", str), ("arquivo", caminho), ...]. Nunca fala com o Telegram."""
@@ -394,7 +399,11 @@ def responder(msg, batimento=None):
     st["resumo_pendente"] = None; save(st)
     registrar("Agente", resp)
     log(f"respondido por {motor} ({st[motor].get('modelo')}) em {time.time() - t0:.0f}s ({len(msg.get('imagens') or [])} img, {len(transc)} áudio, {len(novos)} arquivos)")
-    acoes = [("texto", resp + "\n\n" + assinatura(motor, st[motor].get("modelo")))]
+    reacao = RE_REAGIR.match(resp or "")
+    if reacao: resp = resp[reacao.end():].lstrip()
+    emoji = reacao.group(1).replace("\ufe0f", "") if reacao else ""  # "❤️" do modelo → "❤" que o Telegram aceita
+    acoes = [("reagir", emoji)] if emoji in REACOES_OK else []
+    acoes += [("texto", resp + "\n\n" + assinatura(motor, st[motor].get("modelo")))]
     acoes += [("arquivo", a) for a in novos]
     return acoes
 

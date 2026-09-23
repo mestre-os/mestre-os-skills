@@ -1,5 +1,14 @@
 # Changelog — MestreOS Skills
 
+## 2026-09-23: Telegram 4.2.0 (a porta: uma resposta só pra áudio + foto)
+
+- **Áudio e foto em sequência viram uma resposta só.** Antes, "vou te mandar a foto" + a foto geravam duas respostas ("vou aguardar a foto" e depois outra), gastando o dobro. Agora a janela junta a rajada e o agente responde tudo de uma vez.
+- **Promessa de anexo:** se o dono diz que vai mandar uma foto, print, PDF ou arquivo, a janela reage 🫡 e espera até 1 minuto. Chegou: resposta única. Não chegou (esqueceu, interrupção, internet): a resposta sai e avisa que está aguardando. "Me manda a foto" é pedido, não promessa, e sai na hora.
+- **Texto digitado continua expresso**, sem espera nenhuma.
+- **Reações vivas:** ✍ no áudio (o Telegram não deixa bot usar 👂), 👀 no resto, e depois de entender o agente pode trocar por uma pertinente (❤ 🔥 🙏 👍 🤝).
+- Se a janela fechar no meio de um pacote, chega um aviso só (não um por mensagem) e nada é repetido às cegas.
+- Provas offline: 80 verificações em macOS e em Windows 11 ARM. A conversa real continua sendo o aceite de cada instalação (7D.9, agora com os passos da porta).
+
 ## 2026-09-23: Telegram 4.1.2 (emoji partido no plugin do ramo Claude)
 
 - **Resposta longa podia chegar pela metade no ramo Claude (7A).** O plugin oficial corta respostas acima de 4096 por posição; se o corte cai no meio de um emoji, o Telegram recusa aquele pedaço inteiro. O `telegram-plugin-remedio.py` ganhou o 2º remédio: recua o corte quando ele partiria o emoji.
