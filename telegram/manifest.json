@@ -1,19 +1,19 @@
 {
-  "version": "4.1.0",
-  "released": "2026-09-18",
+  "version": "4.1.1",
+  "released": "2026-09-23",
   "files": {
     ".meuos/hooks/cerebro.py": "e93f999089b3427ee5158ab4db393a77ad135d485ee4337a39eec506fd6f722c",
     ".meuos/hooks/telegram_runtime.py": "d3609ad79379b74fc7d688a25f506bf5094c8292510e1276115af99a6f40560f",
-    ".meuos/scripts/telegram_janela.py": "9b4e300a0906be8a3c74b13ce76a79eb0406bb2b18d8fe4c2fed13090c5865ce",
+    ".meuos/scripts/telegram_janela.py": "24d2f530cd444e45320ccd9fbe31b697bbb601f27446392bede58d727ca7ac20",
     ".meuos/scripts/test-telegram-runtime.py": "fbdd9f81121433d022aa7856e5e7568ebe58ac2a60cae70b366f291a6262bf71",
     ".meuos/scripts/telegram-recovery.py": "96a8e9238af1cc62369f77504786c4d3b34b40fdb36844104c8fca32f33e3cf9",
     ".meuos/scripts/telegram-plugin-remedio.py": "290977e544debb57606268ea5fb840c337ae1ad2255eae14be61aaeb5e66a603",
     ".meuos/scripts/telegram_send.py": "f872c7f2295fc7ac056f9b40cd39dc0288c1035e49a7ccc1c0218546e0a10ae2",
-    ".meuos/scripts/telegram-update.py": "1d608933dc46ffc8930f01ee7461994e2096844a84ed3f5cd63244dee2aeffe3"
+    ".meuos/scripts/telegram-update.py": "7152fc46f1444560f61959b91db0b2c46243e3dc8c7eee61ab4150165bd40d00"
   },
   "validation": {
-    "mac": "19 cerebro + 15 janela + 31 unittest offline checks passed, macOS Python 3.9",
-    "windows": "same 65 offline checks passed, Windows 11 ARM Python 3.12",
+    "mac": "19 cerebro + 18 janela + 31 unittest offline checks passed, macOS Python 3.9",
+    "windows": "same 68 offline checks passed, Windows 11 ARM Python 3.12",
     "live_per_account": "required during installation (7D.9 on the phone, both directions)"
   }
 }

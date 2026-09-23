@@ -92,9 +92,16 @@ def baixar(file_id, destino):
         open(destino, "wb").write(b"fake"); return destino
     tok = ler_token()
     try:
-        subprocess.run(["curl", "-s", "--max-time", "120", "-K", "-", "-o", destino], input=f'url = "https://api.telegram.org/file/bot{tok}/{caminho}"\n', capture_output=True, timeout=140)
-        return destino if os.path.isfile(destino) and os.path.getsize(destino) > 0 else None
-    except Exception: return None
+        # bug S5 23/09/26: faltava text=True com input em str → TypeError engolido pelo except → foto/áudio sumiam calados
+        # --fail: erro HTTP (404/401) não grava o corpo do erro como se fosse a foto; rc != 0 = não baixou
+        r = subprocess.run(["curl", "-s", "--fail", "--max-time", "120", "-o", destino, "-K", "-"],
+                           input=f'url = "https://api.telegram.org/file/bot{tok}/{caminho}"\n', capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=140)
+        if r.returncode == 0 and os.path.isfile(destino) and os.path.getsize(destino) > 0: return destino
+        log(f"download falhou: curl {r.returncode}")
+        if os.path.isfile(destino): os.remove(destino)
+        return None
+    except Exception as e: log(f"download falhou: {type(e).__name__}"); return None
 
 # ---------- transcrição em cadeia ----------
 def _stt_local(path):
@@ -147,14 +154,35 @@ def tem_stt():
 
 # ---------- entrega (com recibo na fila) ----------
 JOB = None; ENTREGUE = 0; FALHOU = False
+def pedacos(texto, limite=4000):
+    """Corta pelo que o Telegram mede (unidades UTF-16, teto 4096: emoji conta 2); prefere quebra de linha."""
+    partes = []
+    while texto:
+        n = u = 0
+        for c in texto:
+            u += 2 if ord(c) > 0xFFFF else 1
+            if u > limite: break
+            n += 1
+        if n < len(texto):
+            q = texto.rfind("\n", 0, n)
+            if q > n // 2: n = q + 1
+        partes.append(texto[:n]); texto = texto[n:]
+    return partes
+
 def enviar_texto(chat, texto):
     global ENTREGUE, FALHOU
     texto = (texto or "").strip() or "(sem texto)"; ok = True
-    while texto:
-        chunk, texto = texto[:3900], texto[3900:]
+    for chunk in pedacos(texto):
         r = api("sendMessage", {"chat_id": chat, "text": chunk, "disable_web_page_preview": "true"})
+        # Telegram mandou esperar (429) ou caiu do lado dele (5xx) = certeza de que não foi → 1 nova tentativa.
+        # Outra recusa (400) falharia igual; sem resposta legível (rede caiu no meio) NÃO repete: pode ter ido, e duplicar é pior.
+        if not r.get("ok") and (r.get("error_code") == 429 or (r.get("error_code") or 0) >= 500):
+            ra = (r.get("parameters") or {}).get("retry_after"); espera = 2 if ra is None else int(ra)
+            log(f"sendMessage recusado ({r.get('error_code')}: {r.get('description')}); tentando de novo em {min(espera, 30)}s")
+            time.sleep(min(espera, 30))
+            r = api("sendMessage", {"chat_id": chat, "text": chunk, "disable_web_page_preview": "true"})
         mid = (r.get("result") or {}).get("message_id") if r.get("ok") else None
-        if mid is None: ok = False; FALHOU = True; log("sendMessage sem confirmação")
+        if mid is None: ok = False; FALHOU = True; log(f"sendMessage sem confirmação ({r.get('error_code', '-')}: {r.get('description')})")
         else:
             ENTREGUE += 1
             if JOB: Queue(STATE).receipt(JOB, mid, "sendMessage")
@@ -215,6 +243,8 @@ def anexos(msg):
         if d: (imgs if d.lower().endswith(cerebro.IMG) else docs).append(d)
     return imgs, auds, docs
 
+AVISO_ANEXO = "[AVISO: o dono mandou um anexo (foto/áudio/arquivo) e eu não consegui baixar. Diga isso com honestidade e peça pra reenviar; não invente o conteúdo.]"
+
 def receber(update):
     msg = update.get("message") or update.get("edited_message")
     if not msg: return
@@ -224,6 +254,8 @@ def receber(update):
     if chat != d: log(f"ignorado chat {chat}"); return
     reagir(chat, mid)
     imgs, auds, docs = anexos(msg)
+    if (msg.get("photo") or msg.get("voice") or msg.get("audio") or msg.get("document")) and not (imgs or auds or docs):
+        log(f"anexo {mid}: download falhou"); texto = (texto + "\n\n" if texto else "") + AVISO_ANEXO
     nome = (msg.get("from") or {}).get("first_name") or "dono"
     payload = {"chat": chat, "mid": str(mid), "user": nome, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "texto": texto,
                "imagens": imgs, "audios": auds, "arquivos": docs, "transcricoes": []}
@@ -394,6 +426,29 @@ def teste():
     chk("13 segunda passada não repete o pedido incerto", enviados().count(enviados()[-1]) == 1)
     # 14 offset persistido e janela em DRY encerra
     gravar_offset(12); chk("14 offset persistido em disco", ler_offset() == 12)
+    # 15 anexo que não baixa (bug S5 23/09/26): aviso honesto no TEXTO, nunca rotulado como caminho de arquivo
+    global api, baixar, JOB
+    _baixar = baixar; baixar = lambda fid, dest: None
+    receber({"update_id": 13, "message": {"message_id": 21, "chat": {"id": 555}, "photo": [{"file_id": "p9"}], "caption": "olha"}})
+    baixar = _baixar
+    with q.connect() as db: pl = json.loads(db.execute("SELECT payload FROM jobs WHERE id='555:21'").fetchone()[0])
+    chk("15 anexo que não baixa: aviso no texto (legenda preservada), sem caminho falso", pl["texto"].startswith("olha") and "AVISO" in pl["texto"] and not (pl["imagens"] or pl["arquivos"]))
+    # 16 corte pelo limite real do Telegram (UTF-16): emoji conta 2
+    longo = "😀" * 3000 + "\nlinha\n" + "a" * 5000
+    ps = pedacos(longo)
+    chk("16 corte UTF-16: nenhum pedaço passa de 4096 e juntar devolve o original", all(len(p.encode("utf-16-le")) // 2 <= 4096 for p in ps) and "".join(ps) == longo and len(ps) >= 3)
+    # 17 recusa: 429 tenta de novo 1x; 400 não repete
+    _api = api; JOB = None; chamadas = []
+    def api_fake(resposta):
+        def f(method, fields=None, *a, **k):
+            chamadas.append(method)
+            return resposta.pop(0) if resposta else {"ok": True, "result": {"message_id": 999}}
+        return f
+    api = api_fake([{"ok": False, "error_code": 429, "parameters": {"retry_after": 1}}]); ok429 = enviar_texto("555", "oi")
+    n429 = len(chamadas); chamadas.clear()
+    api = api_fake([{"ok": False, "error_code": 400, "description": "Bad Request"}]); ok400 = enviar_texto("555", "oi")
+    api = _api
+    chk("17 429 entrega na 2ª tentativa; 400 não repete e fica sem confirmação", ok429 and n429 == 2 and not ok400 and len(chamadas) == 1)
     print(f"----- {ok} ok · {fail} falhas"); return 0 if fail == 0 else 1
 
 if __name__ == "__main__":

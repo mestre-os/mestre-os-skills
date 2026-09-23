@@ -1,5 +1,13 @@
 # Changelog — MestreOS Skills
 
+## 2026-09-23: Telegram 4.1.1 (correções do teste real no celular)
+
+- **Foto e áudio sumiam sem aviso.** O download do anexo quebrava por dentro e o erro era engolido: a mensagem chegava ao cérebro sem a foto ou sem o áudio. Corrigido, com registro no log. Um erro do servidor não vira mais "arquivo baixado".
+- **Anexo que não baixa vira aviso honesto.** O cérebro recebe a instrução de dizer que não conseguiu abrir e pedir o reenvio, nunca de inventar o conteúdo.
+- **Resposta longa com muito emoji não some mais.** O corte agora mede como o Telegram mede (emoji conta dobrado, teto 4096) e prefere quebrar na linha.
+- **Telegram pedindo pra esperar (429) ou fora do ar (5xx):** uma nova tentativa, respeitando o tempo pedido. Outras recusas não repetem e ficam registradas com o motivo.
+- Provas offline: 68 verificações em macOS e em Windows 11 ARM. Conversa real continua sendo aceite por instalação.
+
 ## 2026-09-18: Telegram 4.1.0 (Dupla simétrica, PASSO 7D)
 
 - **Janela neutra** `telegram_janela.py`: dona do bot (getUpdates), pareamento por código de 6 letras impresso no terminal, reação 👀, fila SQLite em ordem, download de foto/voz/arquivo, transcrição em cadeia (whisper local, depois OpenAI, depois Groq grátis, senão "manda em texto", sem inventar conteúdo), entrega com recibo, `--recover` pro agendador, `--status`, `--teste`. Recusa segunda janela e para no 409.
