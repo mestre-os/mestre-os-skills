@@ -324,7 +324,7 @@ def porta(ident, payload):
         linhas.append(f"[nota da janela: ele disse que ia mandar {prom} e nada chegou em {PORTA_PROMESSA:.0f} s (pode ter esquecido, sido interrompido "
                       f"ou o envio falhou). Responda o resto e avise, curto, que está aguardando o anexo prometido ({prom}).]")
     ult = itens[-1]
-    return {**ult, "texto": "\n".join(linhas),
+    return {**ult, "texto": "\n".join(linhas), "mids": [p.get("mid") for p in itens],
             "imagens": [x for p in itens for x in (p.get("imagens") or [])], "audios": [x for p in itens for x in (p.get("audios") or [])],
             "transcricoes": [x for p in itens for x in (p.get("transcricoes") or [])], "arquivos": [x for p in itens for x in (p.get("arquivos") or [])]}
 
@@ -349,12 +349,15 @@ def executar(ident, payload):
         payload = porta(ident, payload)
         if ABSORVIDOS: log(f"porta: {ident} juntou {len(ABSORVIDOS)} mensagem(ns) da rajada")
         acoes = cerebro.responder(payload)
-        incerto = False
+        incerto = False; escolhida = None
         for tipo, valor in acoes:
             if tipo == "texto": enviar_texto(chat, valor)
             elif tipo == "arquivo": enviar_arquivo(chat, valor)
-            elif tipo == "reagir": reagir(chat, payload.get("mid"), valor)
+            elif tipo == "reagir": escolhida = valor
             elif tipo == "falha": incerto = True
+        # troca GARANTIDA (23/09/26): ✍/👀/🫡 nunca fica parado depois da resposta; sem escolha do cérebro, 👌
+        if ENTREGUE and not incerto:
+            for m in (payload.get("mids") or [payload.get("mid")]): reagir(chat, m, escolhida or "👌")
         status = "uncertain" if incerto else ("completed" if ENTREGUE and not FALHOU else "uncertain")
         return status
     except Exception as e:
@@ -561,6 +564,8 @@ def teste():
         db.execute("UPDATE jobs SET status='absorvido', detail='absorvido em 555:260' WHERE id='555:261'")
     n0 = len(enviados()); q.drain(executar, recuperado)
     avisos = [t for t in enviados()[n0:] if "interrompida" in t]
+    chk("26 troca garantida: respondeu sem escolher → 👌; pacote foto+texto → as DUAS viram 👌; motor falhou → sem 👌 (não finge que fez)",
+        reacoes(13)[-1:] == ["👌"] and reacoes(210)[-1:] == ["👌"] and reacoes(211)[-1:] == ["👌"] and "👌" not in reacoes(20))
     chk("25 queda no meio de um pacote: UM aviso só (com '2 mensagens') e os dois pedidos ficam incertos, sem repetir",
         len(avisos) == 1 and "2 mensagens" in avisos[0] and q.status("555:260") == "uncertain" and q.status("555:261") == "uncertain")
     print(f"----- {ok} ok · {fail} falhas"); return 0 if fail == 0 else 1

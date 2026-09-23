@@ -1,5 +1,11 @@
 # Changelog — MestreOS Skills
 
+## 2026-09-23: Telegram 4.2.1 (a reação sempre troca depois da resposta)
+
+- ✍ e 👀 querem dizer "tô ouvindo" e "tô vendo". Quando a resposta sai, a reação de todas as mensagens do pacote troca pela que o agente escolheu (❤ 🔥 🙏 👍 🤝 😢…) ou por 👌. Antes, a troca dependia do agente lembrar, e numa tarefa longa ele esquecia.
+- Se o motor falhar, a reação não vira 👌: não finge que fez.
+- Bot só usa a lista fixa de 73 reações do Telegram (emoji personalizado do Premium também é recusado, testado).
+
 ## 2026-09-23: Telegram 4.2.0 (a porta: uma resposta só pra áudio + foto)
 
 - **Áudio e foto em sequência viram uma resposta só.** Antes, "vou te mandar a foto" + a foto geravam duas respostas ("vou aguardar a foto" e depois outra), gastando o dobro. Agora a janela junta a rajada e o agente responde tudo de uma vez.

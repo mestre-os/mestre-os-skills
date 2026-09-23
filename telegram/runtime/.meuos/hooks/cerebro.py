@@ -131,7 +131,8 @@ def instrucoes(motor):
             f"(tudo que aparecer lá eu envio). Skill `salvar` e os outros ritos do OS valem aqui igual. Você NÃO consegue trocar de cérebro: "
             f"se ele pedir, responda só: 'pra trocar, manda: troca pro Codex' (ou 'volta pro Claude'). Seja rápido: não varra pastas nem skills "
             f"sem necessidade. Reação: a janela já pôs ✍ (áudio) ou 👀 na mensagem dele; se couber uma reação pertinente, comece a resposta com "
-            f"[reagir:EMOJI] usando um destes: ❤ agradecimento, 🔥 empolgação, 🙏 desculpa, 👍 ok, 🤝 combinado, 😁 graça, 🎉 comemoração. "
+            f"[reagir:EMOJI] usando um destes: ❤ agradecimento, 🔥 empolgação, 🙏 desculpa, 👍 ok, 🤝 combinado, 😁 graça, 🎉 comemoração, 😢 notícia ruim, 🫡 ordem dada "
+            f"(sem essa marca, a janela põe 👌 quando a resposta sai). "
             f"Pacote de várias mensagens = uma resposta só.]")
 
 def prefixo_continuidade(st, motor):
@@ -365,7 +366,7 @@ def trocar(st, motor, modelo):
     return f"{assinatura(motor, st[motor].get('modelo') or (MODELOS_CLAUDE.get(modelo) if motor == 'claude' else None))} ligado. Sou eu mesmo, só que pensando com a {nome}. Pode continuar de onde parou."
 
 # ---------- entrada da janela ----------
-REACOES_OK = {"❤", "🔥", "🙏", "👍", "🤝", "😁", "🎉", "👌", "💯", "🫡", "🤔"}
+REACOES_OK = {"❤", "🔥", "🙏", "👍", "🤝", "😁", "🎉", "👌", "💯", "🫡", "🤔", "😢", "🤣", "😍", "👏"}
 RE_REAGIR = re.compile(r"^\s*\[reagir:\s*([^\]\s]{1,4})\s*\]\s*")
 
 def responder(msg, batimento=None):
