@@ -137,10 +137,18 @@ class CerebroTests(unittest.TestCase):
 
     def test_codex_quota_and_login_give_actionable_message(self):
         st = cerebro.load(); st['ativo'] = 'codex'; cerebro.save(st)
-        def quota(cmd, **kw): return subprocess.CompletedProcess(cmd, 1, json.dumps({'type': 'error', 'message': "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 19th, 2026 7:01 AM."}), '')
+        import datetime as _dt
+        volta = _dt.datetime.now() + _dt.timedelta(days=2)
+        quando = volta.strftime('%b ') + str(volta.day) + 'th, ' + volta.strftime('%Y 7:01 AM')
+        def quota(cmd, **kw): return subprocess.CompletedProcess(cmd, 1, json.dumps({'type': 'error', 'message': "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at " + quando + "."}), '')
         with patch.object(cerebro, 'activity_run', side_effect=quota), patch.object(cerebro, 'codex_command', return_value=['codex']):
             acoes = cerebro.responder(self.msg('oi'))
-        self.assertIn('limite do plano', acoes[0][1]); self.assertIn('Sep 19th, 2026 7:01 AM', acoes[0][1]); self.assertIn('troca pro Claude', acoes[0][1])
+        # 4.3.0: cota estourada = troca SOZINHO pro outro motor, com a hora de volta legível
+        self.assertIn('limite do plano', acoes[0][1]); self.assertIn(volta.strftime('%d/%m') + ' 07:01', acoes[0][1]); self.assertIn('Passei pro Claude sozinho', acoes[0][1])
+        self.assertEqual(cerebro.load()['ativo'], 'claude'); self.assertEqual(cerebro.load()['auto']['de'], 'codex')
+        # sem prova de que nada foi feito (a saída do Codex não mostrou início de turno): NÃO refaz, pede reenvio e marca incerto
+        self.assertTrue(any(a[0] == 'falha' for a in acoes)); self.assertIn('me mande de novo', ' '.join(a[1] for a in acoes if a[0] == 'texto'))
+        st = cerebro.load(); st['ativo'] = 'codex'; st.pop('auto', None); st.pop('cota', None); cerebro.save(st)
         def login(cmd, **kw): return subprocess.CompletedProcess(cmd, 1, '', 'ERROR: Not logged in. Run `codex login`.')
         with patch.object(cerebro, 'activity_run', side_effect=login), patch.object(cerebro, 'codex_command', return_value=['codex']):
             acoes = cerebro.responder(self.msg('oi'))

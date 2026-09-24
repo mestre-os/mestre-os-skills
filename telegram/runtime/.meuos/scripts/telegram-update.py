@@ -9,7 +9,7 @@ import sys
 import urllib.request
 
 BASE = 'https://raw.githubusercontent.com/mestre-os/mestre-os-skills/main/telegram/'
-VERSION = '4.2.1'
+VERSION = '4.3.0'
 
 
 def fetch(url, limit):

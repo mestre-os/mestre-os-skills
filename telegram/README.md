@@ -1,6 +1,6 @@
-# Telegram do MestreOS 4.2.1
+# Telegram do MestreOS 4.3.0
 
-Dupla simétrica (PASSO 7D): a janela do bot não pertence a nenhum motor. Um programa do MestreOS em Python (`telegram_janela.py`) recebe as mensagens, guarda numa fila SQLite, transcreve áudio quando há provedor (whisper local, OpenAI ou Groq) e entrega ao cérebro ligado: Claude Code (modo silencioso, sessão retomada) ou Codex (thread retomada). Troca por frase nos dois sentidos, continuidade por resumo, principal e secundário, entrada do segundo motor sem desinstalar nada. O 7C antigo (Claude dono do bot) foi aposentado e vira redirect.
+Dupla simétrica (PASSO 7D): a janela do bot não pertence a nenhum motor. Um programa do MestreOS em Python (`telegram_janela.py`) recebe as mensagens, guarda numa fila SQLite, transcreve áudio quando há provedor (whisper local, OpenAI ou Groq) e entrega ao cérebro ligado: Claude Code (modo silencioso, sessão retomada) ou Codex (thread retomada). Troca por frase nos dois sentidos, continuidade por resumo, principal e secundário, entrada do segundo motor sem desinstalar nada. Desde a 4.3.0, se o cérebro ligado bater no limite do plano, a janela passa sozinha pro outro motor e volta quando a cota libera (7D.7c). O 7C antigo (Claude dono do bot) foi aposentado e vira redirect.
 
 Atualize pelo [prompt oficial](../prompts/atualizar-telegram.md). Veja [integração](INTEGRACAO.md) e [manifesto](manifest.json). O script `telegram-update.py` consulta novidades; `--stage` baixa uma cópia com hashes para revisão e não instala nada. A consulta periódica é opcional.
 

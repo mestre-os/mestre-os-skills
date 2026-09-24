@@ -13,7 +13,7 @@ description: |
   "fim do dia", "fechar o dia", "conferir entrega", "verificar entrega",
   "revisao diaria", "terminei", "pronto", "feito", "entregue", "finalizado",
   "ta pronto?".
-version: 1.2
+version: 1.7
 user-invocable: true
 ---
 
@@ -90,8 +90,41 @@ A casa de cada informacao se decide **na escrita, pela natureza do fato** — nu
 
 ## Passo a passo (instrucoes para o agente)
 
-### PASSO 0 — Detectar contexto + classificar a sessao
+> 💾 Salvar · [contexto] · HH:MM
+>
+> 🧭 PASSO 0 · Contexto e tipo
+> - [x] Linha do tempo: [N dias · N compactações · N salvar; o último cobriu até DD/MM HH:MM]
+> - [x] Contexto: [pasta]
+> - [x] Sessão: [entrega / decisão / conversa]
+>
+> 🔍 PASSO 1 · Conferido        ← bloco some em sessão só de conversa
+> - [x] [o que verificou] — [evidência em 3 palavras]
+> - [ ] [o que pulou] — [motivo]
+>
+> 🧠 PASSO 2 · Síntese
+> 📌 Fizemos
+> - ...
+> 💡 Aprendemos
+> - ...
+> 🔜 Fica pra continuar
+> - ...
+>
+> 👉 Confere a síntese? Confirma, ajusta, adiciona ou remove.
+> ```
 
+### PASSO 0 — Linha do tempo + detectar contexto + classificar a sessao
+
+0. **Linha do tempo desta conversa (sempre primeiro):** rodar
+   `python3 ".meuos/scripts/salvar-linha-do-tempo.py"` na pasta do OS (no Windows, `python` em vez de `python3`).
+   Ele mostra o **placar** (quantos dias, compactações e salvar esta conversa já teve, e até quando o último salvar
+   cobriu), a lista **✅ já salvo** e a lista **🆕 novo desde o último salvar**. Cada 🗜️ da lista nova é uma
+   **ata**: o resumo oficial que a própria IA fez quando a janela encheu e foi compactada, com todas as mensagens
+   do usuario daquele trecho. Esse trecho a conversa atual NAO enxerga mais.
+   - O que esta em ✅ ja foi gravado: nao gravar de novo (conferir o `changelog.md` antes).
+   - Cada ata em 🆕: **ler o arquivo** e trazer pra sintese o que dela ainda nao foi salvo.
+   - Se o script falhar ou nao achar a conversa: seguir com a janela atual e avisar em 1 linha. Nunca travar o salvar.
+   Por que: numa conversa longa, a IA compacta a janela varias vezes. Sem isso, o salvar so enxerga o ultimo
+   pedaco e parece ter esquecido o comeco.
 1. **Identificar o contexto ativo** (qual projeto ou area voce esta salvando):
    - Se ficou obvio na conversa ou o usuario informou, usar esse.
    - Se houver duvida, perguntar: `"Em qual contexto salvo?"` e listar as opcoes que existirem no OS da pessoa.
@@ -135,7 +168,7 @@ Rodar a checagem de qualidade **so no que se aplica** ao que a sessao produziu. 
 
 **Formato de apresentacao do conferir:**
 ```
-Conferido: [o que foi entregue, em 1 linha]
+Conferido: [o que foi entregue em 1 linha]
 - [x] [item verificado] — [evidencia breve]
 - [ ] [item nao aplicavel] — pulado porque [motivo]
 ```
@@ -148,13 +181,14 @@ Sintetizar a sessao lendo o historico atual mais o `aprendizados_do_dia.md` rece
 
 ```
 Sintese da sessao [CONTEXTO]:
+⏱️ Esta conversa: [N dias] · [N compactações] · [N salvar]; o último cobriu até [DD/MM HH:MM]. Aqui vai só o que veio depois.
 
 📌 FIZEMOS:
-- [entrega / decisao / correcao]
-(ou "Sessao de conversa ou analise, sem entregas concretas")
+- [entrega/decisao/correcao]
+(ou "Sessao de discussao/analise — sem entregas concretas")
 
 💡 APRENDEMOS:
-- [insight / solucao / o que nao fazer]
+- [Insight / Solucao / Nao fazer]
 (ou "Sem aprendizados novos")
 
 🔜 FICA PRA CONTINUAR:
@@ -172,7 +206,7 @@ Apresentar e pedir: `"Confere a sintese? Confirma, ajusta, adiciona ou remove."`
 
 ### PASSO 3 — CHECKPOINT duravel (o coracao da skill)
 
-**Este passo roda SEMPRE**, mesmo numa sessao que foi so conversa. E a razao de existir da skill: o arquivo que reconstroi o estado se o provedor compactar a janela.
+**Este passo roda SEMPRE**, mesmo numa sessao que foi so conversa — **logo depois da resposta à síntese** (inclusive "pula"), nunca antes de mostrá-la; ele só é anunciado no cartão final (PASSO 7). E a razao de existir da skill: o arquivo que reconstroi o estado se o provedor compactar a janela.
 
 **Onde gravar:**
 1. Se a pasta `.remember/` existir no OS da pessoa, gravar em **`.remember/CHECKPOINT.md`**.
@@ -204,6 +238,12 @@ Sempre **sobrescrever** esse arquivo com o ultimo estado completo. Ele e o arqui
 ## Como retomar
 [o prompt ou comando exato para uma sessao nova continuar do zero.]
 ```
+
+**Livro-razão (sempre, depois de gravar o checkpoint):** rodar
+`python3 ".meuos/scripts/salvar-linha-do-tempo.py" registrar --contexto <contexto> --checkpoint CHECKPOINT.md`.
+Ele anota numa linha (`.remember/salvar-ledger.tsv`) que esta conversa foi salva ate agora. E isso que faz o
+proximo salvar saber o que ja foi salvo, e que deixa o robo semanal jogar fora as atas ja cobertas (ata que
+nenhum salvar cobriu nunca e apagada; vira aviso).
 
 **Regra de ouro do checkpoint:** uma sessao nova que leia SO o `CHECKPOINT.md` tem que conseguir continuar sem perguntar nada. Se nao consegue, o checkpoint esta incompleto: volte e complete.
 
@@ -310,22 +350,35 @@ Se algo ficou 🔴, **sugerir** uma limpeza ou reorganizacao. **Nao executar, so
 
 ---
 
-### PASSO 7 — Relatorio (neutro, sem saudacao)
+### PASSO 7 — Relatório final: o cartão (curto, escaneável, sem saudação)
+
+> Regra (09/09/26): o cartão aparece **só aqui, no fim** — é o sinal de "salvou de verdade" (memória muscular do aluno).
+> A primeira parte (conferido + síntese) segue no formato normal. O cartão NÃO repete a síntese nem o conferido.
+> Uma ideia por linha, até ~12 palavras, no máximo 5 linhas por bloco. Bloco vazio some (nada de "0" ou "n/a").
+> Linhas do que foi gravado saem como `- [x]` (o app risca a frase inteira: feito); pendência sua sai como `- [ ]`.
 
 ```
-Checkpoint salvo ✓
+✅ Checkpoint salvo · [contexto] · HH:MM
 
-Contexto: [caminho]
-Checkpoint: .remember/CHECKPOINT.md (ou checkpoints/CHECKPOINT.md)
-Conferido: [N itens / "n/a — sessao de conversa"]
-Gate de escrita: [N itens entraram · N redirecionados pro changelog · N incorporados a entrada existente]
-Aprendizados: [N entradas]
-Migrado pro changelog: [N itens]
-Index: [completo / N entradas adicionadas]
-Saude: [ok / X arquivos 🔴]
+📌 Gravado
+- [x] Checkpoint: `.remember/CHECKPOINT-<contexto>.md` (ou `checkpoints/CHECKPOINT.md`)
+- [x] Changelog: N entrada(s)
+- [x] Mestre: N pendência(s) nova(s), N concluída(s) retirada(s)
+- [x] Aprendizados: N entrada(s)
+- [x] Memória: N item(ns)          ← omitir se 0
 
-Como retomar: [a linha "Como retomar" do checkpoint]
+🩺 Saúde
+- 🟢 mestre · 🟡 changelog · 🔴 aprendizados (N linhas)
+- Sugestão: `otimizar-os`          ← só se houver item redutível; senão omitir o bloco
+
+❓ Precisa de você                  ← bloco só existe se houver pergunta
+- [ ] [1 linha por item, terminando com o que responder: "sim / não"]
+
+▶️ Como retomar
+[1 frase: onde abrir + o que ler + a próxima ação]
 ```
+
+Ordem fixa dos blocos; bloco vazio some (não escrever "0" nem "n/a"). O "Conferido" do PASSO 1 e a síntese do PASSO 2 já foram mostrados antes — **não repetir**. Números só quando mudam a ação (linhas 🔴, contagens do que foi gravado).
 
 **Nunca** fechar com "boa noite", "bom descanso", "ate amanha" ou qualquer juizo de horario. Terminar sempre com a linha **"Como retomar"**.
 
@@ -358,7 +411,7 @@ Como retomar: [a linha "Como retomar" do checkpoint]
 - [ ] `index.md` cobre 100% dos `.md` do contexto, satelites criados hoje incluidos
 - [ ] Nada foi movido ou removido sem o usuario ver antes e aprovar
 - [ ] Nenhum segredo (senha, token, dado pessoal) apareceu no que foi gravado
-- [ ] Relatorio do PASSO 7 apresentado, sem saudacao, terminando em "Como retomar"
+- [ ] Cartao final do PASSO 7 (4 blocos, linhas `[x]`, 1 ideia por linha), sem repetir a sintese, terminando em "Como retomar"
 
 Se algum item falhou, corrigir ANTES de declarar concluido. Nunca reportar "pronto" com item pendente.
 

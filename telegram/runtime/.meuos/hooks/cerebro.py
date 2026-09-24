@@ -170,7 +170,10 @@ def motor_codex(st, prompt, imagens, batimento=None):
     c = st["codex"]; outf = os.path.join(STATE, "ultima-codex.txt"); antes = _out_dir_antes()
     try: os.remove(outf)
     except FileNotFoundError: pass
+    ULTIMA.update(lida=False, ferramentas=0)
     if FAKE_CODEX:
+        if FAKE_CODEX.startswith("ERRO:"): ULTIMA.update(lida=True); return False, "", [], FAKE_CODEX[5:]
+        if FAKE_CODEX.startswith("ERRO_DEPOIS:"): ULTIMA.update(lida=True, ferramentas=1); return False, "", [], FAKE_CODEX[12:]
         c["thread"] = c.get("thread") or "fake-thread"; return True, FAKE_CODEX, [], ""
     roots = 'sandbox_workspace_write.writable_roots=["' + MEMDIR.replace("\\", "/") + '","' + os.path.join(OS_DIR, "outputs").replace("\\", "/") + '"]'
     comum = ["--skip-git-repo-check", "-m", c["modelo"], "-c", roots, "-c", "sandbox_workspace_write.network_access=true", "-o", outf]
@@ -188,6 +191,9 @@ def motor_codex(st, prompt, imagens, batimento=None):
         try: d = json.loads(ln)
         except Exception: continue
         if isinstance(d, dict) and d.get("type") == "thread.started" and d.get("thread_id"): c["thread"] = d["thread_id"]
+        if isinstance(d, dict) and d.get("type") in ("thread.started", "turn.started"): ULTIMA["lida"] = True
+        it = d.get("item") if isinstance(d, dict) else None
+        if isinstance(it, dict) and it.get("type") not in (None, "agent_message", "reasoning", "todo_list", "error"): ULTIMA["ferramentas"] += 1
     resp = ""
     try:
         with open(outf, encoding="utf-8") as f: resp = f.read().strip()
@@ -205,7 +211,10 @@ def motor_codex(st, prompt, imagens, batimento=None):
 def motor_claude(st, prompt, imagens, batimento=None):
     """Roda o Claude Code em modo -p (sessão retomada). Devolve (ok, resposta, arquivos_novos, erro)."""
     c = st["claude"]; antes = _out_dir_antes()
+    ULTIMA.update(lida=False, ferramentas=0)
     if FAKE_CLAUDE:
+        if FAKE_CLAUDE.startswith("ERRO:"): ULTIMA.update(lida=True); return False, "", [], FAKE_CLAUDE[5:]
+        if FAKE_CLAUDE.startswith("ERRO_DEPOIS:"): ULTIMA.update(lida=True, ferramentas=1); return False, "", [], FAKE_CLAUDE[12:]
         c["sessao"] = c.get("sessao") or "fake-sessao"; c["modelo"] = c.get("modelo") or "claude-fake-1"; return True, FAKE_CLAUDE, [], ""
     if imagens: prompt += "\n[Fotos anexas (abra com a ferramenta Read): " + ", ".join(imagens) + "]"
     cmd = [CLAUDE, "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
@@ -220,6 +229,9 @@ def motor_claude(st, prompt, imagens, batimento=None):
     for ln in (r.stdout or "").splitlines():
         try: d = json.loads(ln)
         except Exception: continue
+        if isinstance(d, dict) and d.get("type") == "system": ULTIMA["lida"] = True
+        if isinstance(d, dict) and d.get("type") == "assistant":
+            ULTIMA["ferramentas"] += sum(1 for b in ((d.get("message") or {}).get("content") or []) if isinstance(b, dict) and b.get("type") == "tool_use")
         if isinstance(d, dict) and d.get("type") == "result":
             resp = (d.get("result") or "").strip(); ok = not d.get("is_error") and d.get("subtype") == "success"
             if d.get("session_id"): c["sessao"] = d["session_id"]
@@ -267,7 +279,41 @@ def _run_stdin(cmd, prompt):
 
 RE_LOGIN = re.compile(r"(?i)not logged in|login expired|please run /login|invalid api key|oauth token[^\n]{0,30}expired|authentication_error|401 unauthorized|please log ?in|run `?codex login")
 RE_COTA = re.compile(r"(?i)usage limit|hit your (usage )?limit|limit reached|quota|credit balance is too low|rate limit")
-RE_VOLTA_COTA = re.compile(r"(?i)try again (?:at|in) ([^.\n\"]{3,60})")
+RE_VOLTA_COTA = re.compile(r"(?i)(?:try again (?:at|in)|resets(?: at| in)?) ([^.\n\"]{2,60})")
+COTA_PADRAO = 5 * 3600  # sem hora legível na mensagem: tenta de novo em 5 h (se ainda estiver preso, troca de novo)
+
+def volta_em(texto, agora=None):
+    """'3:05 PM' · '6am (America/Sao_Paulo)' · 'in 2 hours' · '14:30' → epoch da próxima vez que isso acontece."""
+    agora = agora or time.time(); t = (texto or "").lower()
+    tz = None  # juiz 23/09: hora escrita num fuso ("6am (America/Sao_Paulo)", "UTC") é lida nesse fuso
+    try:
+        from zoneinfo import ZoneInfo
+        mz = re.search(r"\(([A-Za-z_]+/[A-Za-z_]+(?:/[A-Za-z_]+)?)\)", texto or "")
+        tz = ZoneInfo(mz.group(1)) if mz else (datetime.timezone.utc if re.search(r"\butc\b", t) else None)
+    except Exception: tz = datetime.timezone.utc if re.search(r"\butc\b", t) else None
+    MESES = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+    m = re.search(r"\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})\s*(am|pm)?", t)
+    if m and m.group(1) in MESES:  # data completa do Codex: "Sep 19th, 2026 7:01 AM"
+        h = int(m.group(4)) % 12 + (12 if m.group(6) == "pm" else 0) if m.group(6) else int(m.group(4))
+        try:
+            d = datetime.datetime(int(m.group(3)), MESES[m.group(1)], int(m.group(2)), h, int(m.group(5)), tzinfo=tz).timestamp()
+            return d if d > agora else agora + COTA_PADRAO
+        except ValueError: pass
+    m = re.search(r"in (\d+)\s*(hour|hr|h\b|minute|min)", t)
+    if m: return agora + int(m.group(1)) * (3600 if m.group(2).startswith("h") else 60)
+    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", t) or re.search(r"\b(\d{1,2}):(\d{2})\b()", t)
+    if m:
+        h, mi = int(m.group(1)) % 24, int(m.group(2) or 0)
+        if m.group(3) == "pm" and h < 12: h += 12
+        if m.group(3) == "am" and h == 12: h = 0
+        d = datetime.datetime.fromtimestamp(agora, tz).replace(hour=h, minute=mi, second=0, microsecond=0)
+        if d.timestamp() <= agora: d += datetime.timedelta(days=1)
+        return d.timestamp()
+    return agora + COTA_PADRAO
+
+def quando_txt(ts):
+    d = datetime.datetime.fromtimestamp(ts)
+    return d.strftime("%H:%M") if d.date() == datetime.date.today() else d.strftime("%d/%m %H:%M")
 
 def causa_conhecida(texto):
     """stderr/resultado do motor → ("login", "") | ("cota", "quando volta") | None. Sem isso o dono recebia só 'código 1'."""
@@ -293,6 +339,7 @@ def aviso_falha(st, motor, erro):
             + (f" Se quiser, \"troca pro {'Codex' if outro == 'codex' else 'Claude'}\" pra seguir com o outro." if outro else ""))
 
 MOTORES = {"codex": motor_codex, "claude": motor_claude}
+ULTIMA = {"lida": False, "ferramentas": 0}  # lida = a saída do motor foi lida; ferramentas = quantas ele usou antes de parar
 
 def resumir(st, motor):
     """pede ao motor que está saindo um resumo da conversa (continuidade pro outro). Sem conversa = sem resumo."""
@@ -338,8 +385,8 @@ def comando(n):
         return ("troca", motor, modelo)
     return None
 
-def trocar(st, motor, modelo):
-    """executa a troca (nos dois sentidos) e devolve o texto pro celular."""
+def trocar(st, motor, modelo, resumo=True):
+    """executa a troca (nos dois sentidos) e devolve o texto pro celular. resumo=False: o motor que sai está sem cota."""
     if motor not in (st["principal"], st.get("secundario")):
         if not tem(motor):
             return (f"🤔 Você só tem o {st['principal'].capitalize()} nesta máquina. Quando assinar o "
@@ -358,7 +405,7 @@ def trocar(st, motor, modelo):
         return f"{assinatura(motor, st[motor].get('modelo'))} já está ligado. Pode mandar."
     de = st["ativo"]
     if de != motor:
-        resumo = resumir(st, de)
+        resumo = resumir(st, de) if resumo else ""
         st["resumo_pendente"] = {"de": assinatura(de, st[de].get("modelo")), "para": motor, "texto": resumo} if resumo else None
     st["ativo"] = motor; st["desde"] = time.strftime("%d/%m %H:%M"); save(st)
     log(f"troca {de} → {motor} ({st[motor].get('modelo')})")
@@ -379,8 +426,18 @@ def responder(msg, batimento=None):
     if cmd:
         registrar("Dono", texto or falado)
         if cmd[0] == "status": out = status_txt(st)
-        else: out = trocar(st, cmd[1], cmd[2])
+        else:
+            if st.pop("auto", None): save(st); log("troca manual: volta automática cancelada")
+            out = trocar(st, cmd[1], cmd[2])
         registrar("Agente", out); return [("texto", out)]
+    antes_acoes = []
+    auto = st.get("auto") or {}
+    if auto.get("de") and time.time() >= auto.get("volta_em", 0) and st["ativo"] != auto["de"] and auto["de"] in (st["principal"], st.get("secundario")):
+        # 4.3.0: a cota do motor que tinha estourado já voltou → volta sozinho pra ele (com o resumo do que rolou no outro)
+        quem = "Claude" if auto["de"] == "claude" else "Codex"
+        trocar(st, auto["de"], None); st = load(); st.pop("auto", None); save(st)
+        antes_acoes.append(("texto", f"🔙 A cota do {quem} voltou. Voltei pra ele."))
+        log(f"volta automática → {auto['de']}")
     motor = st["ativo"]
     envelope = (f'<channel source="mestreos-telegram" chat_id="{msg.get("chat")}" message_id="{msg.get("mid")}" user="{msg.get("user", "")}" '
                 f'ts="{msg.get("ts", "")}">{texto}</channel>')
@@ -396,14 +453,28 @@ def responder(msg, batimento=None):
     save(st)  # thread/sessão preservadas mesmo depois de falha
     if not ok:
         log(f"{motor} falhou ({time.time() - t0:.0f}s): {erro}")
-        return [("texto", aviso_falha(st, motor, erro)), ("falha", (erro or "")[:200])]  # "falha" = a janela marca o pedido como incerto, nunca repete
+        causa = causa_conhecida(erro)
+        outro = st.get("secundario") if motor == st["principal"] else st["principal"]
+        preso = (st.get("cota") or {}).get(outro, 0) > time.time() if outro else True
+        if causa and causa[0] == "cota" and outro and not preso and not msg.get("_retentativa"):
+            # 4.3.0 anti-mudo: cota estourada → troca SOZINHO pro outro motor e volta quando liberar
+            volta = volta_em(causa[1]); st.setdefault("cota", {})[motor] = volta
+            trocar(st, outro, None, resumo=False); st = load()
+            st.setdefault("cota", {})[motor] = volta; st["auto"] = {"de": motor, "volta_em": volta}; save(st)
+            quem, qo = ("Claude" if motor == "claude" else "Codex"), ("Codex" if outro == "codex" else "Claude")
+            aviso = f"⏳ O {quem} bateu no limite do plano (volta às {quando_txt(volta)}). Passei pro {qo} sozinho e volto pro {quem} quando liberar."
+            log(f"troca automática {motor} → {outro} por cota (volta {quando_txt(volta)})")
+            if ULTIMA["lida"] and ULTIMA["ferramentas"] == 0 and not novos:  # PROVA de que nada foi feito: o outro responde já
+                return antes_acoes + [("texto", aviso)] + responder(dict(msg, _retentativa=True), batimento)
+            return antes_acoes + [("texto", aviso + " Seu pedido parou no meio; me mande de novo que eu sigo daqui."), ("falha", (erro or "")[:200])]
+        return antes_acoes + [("texto", aviso_falha(st, motor, erro)), ("falha", (erro or "")[:200])]  # "falha" = a janela marca o pedido como incerto, nunca repete
     st["resumo_pendente"] = None; save(st)
     registrar("Agente", resp)
     log(f"respondido por {motor} ({st[motor].get('modelo')}) em {time.time() - t0:.0f}s ({len(msg.get('imagens') or [])} img, {len(transc)} áudio, {len(novos)} arquivos)")
     reacao = RE_REAGIR.match(resp or "")
     if reacao: resp = resp[reacao.end():].lstrip()
     emoji = reacao.group(1).replace("\ufe0f", "") if reacao else ""  # "❤️" do modelo → "❤" que o Telegram aceita
-    acoes = [("reagir", emoji)] if emoji in REACOES_OK else []
+    acoes = antes_acoes + ([("reagir", emoji)] if emoji in REACOES_OK else [])
     acoes += [("texto", resp + "\n\n" + assinatura(motor, st[motor].get("modelo")))]
     acoes += [("arquivo", a) for a in novos]
     return acoes
@@ -450,6 +521,40 @@ def teste():
     r = run("", fake_claude="não ouvi", audios=["/x/a.oga"]);                    chk("14 áudio sem transcrição avisa o motor, não inventa conteúdo", "não ouvi" in txt(r))
     r = run("usa o codigo que te mandei", fake_claude="usei");                   chk("14b 'usa o codigo' não é troca pro Codex", "usei" in txt(r) and st()["ativo"] == "claude")
     r = run("oi", fake_claude=None, principal="claude", secundario="codex");     chk("14c motor que falha: aviso honesto + ação 'falha' (pedido vira incerto)", any(a[0] == "falha" for a in r.get("acoes", [])) and "parou antes de concluir" in txt(r))
+    # 4.3.0: cota estourada no principal → troca sozinho pro secundário, refaz o pedido, e volta quando liberar
+    subprocess.run([sys.executable, me, "--motores", "claude", "codex"], capture_output=True, env=dict(os.environ))
+    r = run("me ajuda com a planilha", fake_claude="ERRO:You've hit your usage limit · resets 11pm", fake_codex="feito pelo codex")
+    chk("17 cota no principal → troca sozinho, avisa com hora e o Codex responde o mesmo pedido",
+        st()["ativo"] == "codex" and "bateu no limite" in txt(r) and "feito pelo codex" in txt(r) and (st().get("auto") or {}).get("de") == "claude" and not any(a[0] == "falha" for a in r.get("acoes", [])))
+    r = run("e agora?", fake_claude="não devia", fake_codex="ainda eu");          chk("18 antes da hora de volta, segue no Codex", "ainda eu" in txt(r) and st()["ativo"] == "codex")
+    s_ = st(); s_["auto"]["volta_em"] = 0
+    with open(os.path.join(T, "s", "cerebro.json"), "w", encoding="utf-8") as f: json.dump(s_, f)
+    r = run("voltou?", fake_claude="de volta", fake_codex="resumo do codex")
+    chk("19 passou a hora → volta sozinho pro Claude, avisa e responde", st()["ativo"] == "claude" and "cota do Claude voltou" in txt(r) and "de volta" in txt(r) and not st().get("auto"))
+    r = run("oi", fake_claude="ERRO:usage limit reached", fake_codex="ERRO:You've hit your usage limit. Try again at 3:05 PM")
+    chk("20 os dois sem cota → aviso honesto, sem laço", "bateu no limite" in txt(r) and any(a[0] == "falha" for a in r.get("acoes", [])))
+    chk("21 hora de volta: '6am', '3:05 PM', 'in 2 hours', 'Sep 19th, 2099 7:01 AM'", abs(volta_em("in 2 hours", 1000) - 8200) < 1 and datetime.datetime.fromtimestamp(volta_em("resets 6am")).hour == 6
+        and datetime.datetime.fromtimestamp(volta_em("try again at 3:05 PM")).strftime("%H:%M") == "15:05"
+        and datetime.datetime.fromtimestamp(volta_em("try again at Sep 19th, 2099 7:01 AM")).strftime("%d/%m/%Y %H:%M") == "19/09/2099 07:01"
+        and datetime.datetime.fromtimestamp(volta_em("try again at Sep 19th, 2099 7:01 PM")).strftime("%H:%M") == "19:01")
+    # juiz 23/09: só refaz com prova de que nada foi feito; troca manual cancela a volta automática; fuso da mensagem
+    subprocess.run([sys.executable, me, "--motores", "claude", "codex"], capture_output=True, env=dict(os.environ))
+    r = run("apaga o rascunho velho", fake_claude="ERRO_DEPOIS:You've hit your usage limit · resets 11pm", fake_codex="NÃO PODIA RODAR")
+    chk("22 cota DEPOIS de usar ferramenta → troca, mas NÃO refaz (pede reenvio, marca incerto)",
+        st()["ativo"] == "codex" and "NÃO PODIA RODAR" not in txt(r) and "me mande de novo" in txt(r) and any(a[0] == "falha" for a in r.get("acoes", [])))
+    r = run("troca pro codex terra", fake_codex="x")
+    chk("23 troca manual durante a reserva cancela a volta automática", not st().get("auto") and st()["ativo"] == "codex")
+    s_ = st(); s_["auto"] = {"de": "claude", "volta_em": 0}; s_["ativo"] = "codex"
+    with open(os.path.join(T, "s", "cerebro.json"), "w", encoding="utf-8") as f: json.dump(s_, f)
+    r = run("troca pro codex sol", fake_codex="y"); r = run("oi", fake_claude="não devia", fake_codex="fiquei no codex")
+    chk("23b depois da troca manual, a hora de volta não arrasta de volta pro Claude", "fiquei no codex" in txt(r) and st()["ativo"] == "codex")
+    agora_ = datetime.datetime(2030, 1, 1, 12, 0, tzinfo=datetime.timezone.utc).timestamp()
+    try:
+        from zoneinfo import ZoneInfo; ZoneInfo("America/Sao_Paulo"); tem_tz = True
+    except Exception: tem_tz = False  # Windows sem o pacote tzdata: cai na hora local (a UTC continua certa)
+    chk("24 fuso da mensagem: '6am (America/Sao_Paulo)' = 09:00 UTC; '14:00 UTC' = 14:00 UTC",
+        (not tem_tz or datetime.datetime.fromtimestamp(volta_em("resets 6am (America/Sao_Paulo)", agora_), datetime.timezone.utc).strftime("%H:%M") == "09:00")
+        and datetime.datetime.fromtimestamp(volta_em("try again at 14:00 UTC", agora_), datetime.timezone.utc).strftime("%H:%M") == "14:00")
     # aluno só-Codex: principal codex, sem secundário
     subprocess.run([sys.executable, me, "--motores", "codex", "-"], capture_output=True, env=dict(os.environ))
     r = run("oi", fake_codex="opa", principal="codex", secundario=None);          chk("15 aluno só-Codex: Codex é o principal e responde", "opa" in txt(r) and st()["ativo"] == "codex")

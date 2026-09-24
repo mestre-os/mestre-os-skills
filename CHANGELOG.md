@@ -1,5 +1,14 @@
 # Changelog — MestreOS Skills
 
+## 2026-09-24: MestreOS 4.3.0 (salvar com linha do tempo + o bot não fica mudo por cota)
+
+- **Salvar enxerga a conversa inteira.** Numa conversa longa a IA resume a janela várias vezes (compactação), e o salvar só via o último pedaço. Agora cada resumo vira uma **ata** guardada no seu OS, e o salvar abre com o placar ("esta conversa: 5 dias · 2 compactações · 3 salvar; o último cobriu até 22/09 18:00"), a lista do que já foi salvo e a do que é novo. Grava só o novo, sem repetir.
+- **Livro-razão:** cada salvar deixa 1 linha dizendo até onde cobriu. O robô semanal joga fora as atas que um salvar já cobriu (depois de 7 dias); ata que ninguém salvou nunca é apagada e vira aviso.
+- **O contexto certo:** o robô que guarda o caderno antes da compactação passa a decidir o contexto pelo trabalho (arquivos lidos e editados, último salvar), não pela última palavra da conversa.
+- **Telegram (Dupla):** se o cérebro ligado bater no limite do plano, a janela passa sozinha pro outro motor e avisa com a hora de volta; se nada tinha sido feito, o outro já responde o mesmo pedido. Quando a cota volta, retorna sozinha, com o resumo do que rolou.
+- Skill `salvar` v1.7 aqui no repositório; as atas, o livro-razão e o gancho novo chegam pelo instalador 4.3.0 (modo ATUALIZAR). Sem eles, o salvar v1.7 segue funcionando como antes.
+- Provas offline: 90 verificações do Telegram + 23 da linha do tempo, em macOS e Windows 11 ARM. A conversa real continua sendo o aceite de cada instalação.
+
 ## 2026-09-23: Telegram 4.2.1 (a reação sempre troca depois da resposta)
 
 - ✍ e 👀 querem dizer "tô ouvindo" e "tô vendo". Quando a resposta sai, a reação de todas as mensagens do pacote troca pela que o agente escolheu (❤ 🔥 🙏 👍 🤝 😢…) ou por 👌. Antes, a troca dependia do agente lembrar, e numa tarefa longa ele esquecia.
