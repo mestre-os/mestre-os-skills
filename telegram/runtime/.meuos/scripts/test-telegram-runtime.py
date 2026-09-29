@@ -1,0 +1,487 @@
+#!/usr/bin/env python3
+"""Regressões Telegram sem conta, rede, token ou chamada de IA. Mac + Windows.
+Cobre a fila (telegram_runtime), o cérebro simétrico (cerebro) e a janela neutra (telegram_janela) do PASSO 7D."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+HOOKS = Path(__file__).resolve().parent.parent / 'hooks'
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(HOOKS)); sys.path.insert(0, str(SCRIPTS))
+from telegram_runtime import Queue, activity_run
+import cerebro
+import telegram_janela as janela
+
+
+class RuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.q = Queue(self.root / 'queue')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_fifo_dedup_multi_process(self):
+        for i in range(5): self.assertTrue(self.q.enqueue(str(i), {'n': i}))
+        self.assertFalse(self.q.enqueue('2', {'n': 999}))
+        code = '''import sys,time
+sys.path.insert(0,sys.argv[1])
+from telegram_runtime import Queue
+q=Queue(sys.argv[2])
+def execute(i,p):
+ with open(sys.argv[3],'a') as f: f.write(i+' start\\n'); f.flush()
+ time.sleep(.05)
+ with open(sys.argv[3],'a') as f: f.write(i+' end\\n'); f.flush()
+ return 'completed'
+q.drain(execute)
+'''
+        out = self.root / 'order'
+        children = [subprocess.Popen([sys.executable, '-c', code, str(HOOKS), str(self.q.path), str(out)]) for _ in range(3)]
+        for c in children: self.assertEqual(c.wait(timeout=15), 0)
+        self.assertEqual(out.read_text().splitlines(), [f'{i} {phase}' for i in range(5) for phase in ('start', 'end')])
+        self.assertTrue(all(self.q.status(str(i)) == 'completed' for i in range(5)))
+
+    def test_queued_survives_process_restart(self):
+        self.q.enqueue('a', {'body': 'retomar'})
+        other = Queue(self.q.path); seen = []
+        other.drain(lambda ident, p: seen.append(p['body']) or 'completed')
+        self.assertEqual(seen, ['retomar'])
+
+    def test_interrupted_running_not_replayed(self):
+        self.q.enqueue('old', {}); self.q.finish('old', 'running')
+        self.q.enqueue('next', {}); seen = []; alerted = []
+        self.q.drain(lambda i, p: seen.append(i) or 'completed', alerted.append)
+        self.assertEqual(seen, ['next']); self.assertEqual(alerted, ['old'])
+        self.assertEqual(self.q.status('old'), 'uncertain')
+
+    def test_exception_preserves_payload_without_retry(self):
+        self.q.enqueue('a', {'question': 'original'})
+        def explode(i, p): raise RuntimeError('after external action')
+        self.q.drain(explode)
+        self.q.drain(lambda i, p: self.fail('replayed'))
+        self.assertEqual(self.q.status('a'), 'uncertain')
+        with self.q.connect() as db:
+            self.assertIn('original', db.execute('SELECT payload FROM jobs').fetchone()[0])
+
+    def test_active_process_outlives_total_timeout(self):
+        t = time.monotonic()
+        r = activity_run([sys.executable, '-u', '-c', 'import time\nfor i in range(6):\n print(i,flush=True);time.sleep(.15)'], str(self.root), .5)
+        self.assertEqual(r.returncode, 0); self.assertGreater(time.monotonic()-t, .5)
+
+    def test_silent_process_times_out(self):
+        with self.assertRaises(subprocess.TimeoutExpired):
+            activity_run([sys.executable, '-c', 'import time;time.sleep(5)'], str(self.root), .4)
+
+    def test_stderr_noise_does_not_hide_stall(self):
+        with self.assertRaises(subprocess.TimeoutExpired):
+            activity_run([sys.executable, '-u', '-c', 'import time,sys\nfor i in range(20):\n print(i,file=sys.stderr,flush=True);time.sleep(.05)'], str(self.root), .4)
+
+
+class CerebroTests(unittest.TestCase):
+    """o cérebro decide quem responde; nunca fala com o Telegram."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
+        self.patches = [patch.object(cerebro, 'STATE', str(self.root / 's')), patch.object(cerebro, 'SF', str(self.root / 's' / 'cerebro.json')),
+                        patch.object(cerebro, 'CONVERSA', str(self.root / 's' / 'conversa.jsonl')), patch.object(cerebro, 'LOGF', str(self.root / 's' / 'log')),
+                        patch.object(cerebro, 'OS_DIR', str(self.root)), patch.object(cerebro, 'MEMDIR', str(self.root / 'mem')),
+                        patch.object(cerebro, 'CLAUDE', str(self.root / 'nao-claude')), patch.object(cerebro, 'CODEX', str(self.root / 'nao-codex'))]
+        for p in self.patches: p.start()
+        cerebro.save(cerebro.novo_estado('claude', 'codex'))
+
+    def tearDown(self):
+        for p in self.patches: p.stop()
+        self.tmp.cleanup()
+
+    def msg(self, texto, **kw):
+        d = {'chat': '1', 'mid': '1', 'user': 'x', 'ts': 't', 'texto': texto, 'imagens': [], 'audios': [], 'transcricoes': []}; d.update(kw); return d
+
+    def test_claude_motor_parses_stream_json_and_keeps_session(self):
+        seen = {}
+        def fake_run(cmd, prompt):
+            seen['cmd'] = cmd; seen['prompt'] = prompt
+            out = '\n'.join([json.dumps({'type': 'system', 'subtype': 'init'}),
+                             json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'pronto', 'session_id': 'sess-1', 'modelUsage': {'claude-opus-5': {}}})])
+            return subprocess.CompletedProcess(cmd, 0, out, '')
+        with patch.object(cerebro, '_run_stdin', side_effect=fake_run):
+            acoes = cerebro.responder(self.msg('oi', imagens=[str(self.root / 'f.jpg')]))
+        self.assertEqual(acoes[0][0], 'texto'); self.assertIn('pronto', acoes[0][1]); self.assertIn('🟣 Claude · Opus 5', acoes[0][1])
+        self.assertIn('--session-id', seen['cmd']); self.assertNotIn('oi', ' '.join(seen['cmd']))  # prompt vai pelo stdin, nunca pelo argv
+        self.assertIn('<channel source="mestreos-telegram"', seen['prompt']); self.assertIn('f.jpg', seen['prompt'])
+        st = cerebro.load(); self.assertEqual(st['claude']['sessao'], 'sess-1'); self.assertEqual(st['claude']['modelo'], 'claude-opus-5')
+        with patch.object(cerebro, '_run_stdin', side_effect=fake_run):
+            cerebro.responder(self.msg('de novo'))
+        self.assertIn('--resume', seen['cmd']); self.assertIn('sess-1', seen['cmd'])
+
+    def test_claude_motor_error_result_is_failure(self):
+        def fake_run(cmd, prompt):
+            return subprocess.CompletedProcess(cmd, 1, json.dumps({'type': 'result', 'subtype': 'error_during_execution', 'is_error': True, 'result': 'partial'}), 'boom')
+        with patch.object(cerebro, '_run_stdin', side_effect=fake_run):
+            acoes = cerebro.responder(self.msg('oi'))
+        self.assertTrue(any(a[0] == 'falha' for a in acoes)); self.assertIn('parou antes de concluir', acoes[0][1])
+
+    def test_claude_login_lost_gives_actionable_message(self):
+        for saida in (subprocess.CompletedProcess([], 1, json.dumps({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'Login expired · Please run /login'}), ''),
+                      subprocess.CompletedProcess([], 1, '', 'Error: Not logged in. Please run /login')):
+            with patch.object(cerebro, '_run_stdin', return_value=saida):
+                acoes = cerebro.responder(self.msg('oi'))
+            self.assertIn('claude auth login', acoes[0][1]); self.assertIn('perdeu o login', acoes[0][1]); self.assertNotIn('código 1', acoes[0][1])
+            self.assertTrue(any(a[0] == 'falha' for a in acoes)); self.assertIn('troca pro Codex', acoes[0][1])
+
+    def test_codex_quota_and_login_give_actionable_message(self):
+        st = cerebro.load(); st['ativo'] = 'codex'; cerebro.save(st)
+        import datetime as _dt
+        volta = _dt.datetime.now() + _dt.timedelta(days=2)
+        quando = volta.strftime('%b ') + str(volta.day) + 'th, ' + volta.strftime('%Y 7:01 AM')
+        def quota(cmd, **kw): return subprocess.CompletedProcess(cmd, 1, json.dumps({'type': 'error', 'message': "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at " + quando + "."}), '')
+        with patch.object(cerebro, 'activity_run', side_effect=quota), patch.object(cerebro, 'codex_command', return_value=['codex']):
+            acoes = cerebro.responder(self.msg('oi'))
+        # 4.3.0: cota estourada = troca SOZINHO pro outro motor, com a hora de volta legível
+        self.assertIn('limite do plano', acoes[0][1]); self.assertIn(volta.strftime('%d/%m') + ' 07:01', acoes[0][1]); self.assertIn('Passei pro Claude sozinho', acoes[0][1])
+        self.assertEqual(cerebro.load()['ativo'], 'claude'); self.assertEqual(cerebro.load()['auto']['de'], 'codex')
+        # sem prova de que nada foi feito (a saída do Codex não mostrou início de turno): NÃO refaz, pede reenvio e marca incerto
+        self.assertTrue(any(a[0] == 'falha' for a in acoes)); self.assertIn('me mande de novo', ' '.join(a[1] for a in acoes if a[0] == 'texto'))
+        st = cerebro.load(); st['ativo'] = 'codex'; st.pop('auto', None); st.pop('cota', None); cerebro.save(st)
+        def login(cmd, **kw): return subprocess.CompletedProcess(cmd, 1, '', 'ERROR: Not logged in. Run `codex login`.')
+        with patch.object(cerebro, 'activity_run', side_effect=login), patch.object(cerebro, 'codex_command', return_value=['codex']):
+            acoes = cerebro.responder(self.msg('oi'))
+        self.assertIn('codex login', acoes[0][1]); self.assertIn('perdeu o login', acoes[0][1])
+
+    def test_unknown_failure_keeps_generic_message(self):
+        with patch.object(cerebro, '_run_stdin', return_value=subprocess.CompletedProcess([], 2, '', 'segfault qualquer')):
+            acoes = cerebro.responder(self.msg('oi'))
+        self.assertIn('parou antes de concluir', acoes[0][1]); self.assertNotIn('login', acoes[0][1].lower())
+
+    def test_codex_motor_resume_json_and_partial_output_is_failure(self):
+        st = cerebro.load(); st['ativo'] = 'codex'; st['codex']['thread'] = 'existing'; cerebro.save(st)
+        def run(cmd, **kw):
+            self.assertIn('--json', cmd); self.assertIn('sandbox_mode="workspace-write"', cmd); self.assertIn('existing', cmd)
+            Path(cmd[cmd.index('-o')+1]).write_text('partial', encoding='utf-8')
+            return subprocess.CompletedProcess(cmd, 1, '', '')
+        with patch.object(cerebro, 'activity_run', side_effect=run), patch.object(cerebro, 'codex_command', return_value=['codex']):
+            ok, resp, novos, erro = cerebro.motor_codex(cerebro.load(), 'hello', [])
+        self.assertFalse(ok)
+
+    def test_switch_both_directions_with_summary(self):
+        with patch.object(cerebro, 'FAKE_CLAUDE', 'oi do claude'):
+            cerebro.responder(self.msg('oi'))
+            acoes = cerebro.responder(self.msg('troca pro Sol'))
+        st = cerebro.load(); self.assertEqual(st['ativo'], 'codex'); self.assertEqual(st['resumo_pendente']['para'], 'codex'); self.assertIn('ligado', acoes[0][1])
+        with patch.object(cerebro, 'FAKE_CODEX', 'oi do codex'):
+            seen = {}
+            real = cerebro.motor_codex
+            def spy(st, prompt, imagens, batimento=None): seen['prompt'] = prompt; return real(st, prompt, imagens)
+            with patch.object(cerebro, 'MOTORES', {'codex': spy, 'claude': cerebro.motor_claude}):
+                cerebro.responder(self.msg('e aí'))
+            self.assertIn('Continuidade', seen['prompt']); self.assertIn('Últimas trocas', seen['prompt'])
+            acoes = cerebro.responder(self.msg('volta pro Claude'))
+        st = cerebro.load(); self.assertEqual(st['ativo'], 'claude'); self.assertEqual(st['resumo_pendente']['para'], 'claude')
+
+    def test_only_one_engine_refuses_switch_without_breaking(self):
+        cerebro.save(cerebro.novo_estado('codex', None))
+        acoes = cerebro.responder(self.msg('volta pro claude'))
+        self.assertIn('só tem o Codex', acoes[0][1]); self.assertEqual(cerebro.load()['ativo'], 'codex')
+
+    def test_dictation_variants_and_false_positives(self):
+        self.assertEqual(cerebro.comando(cerebro.norm('Volta para o Claudio')), ('troca', 'claude', None))
+        self.assertEqual(cerebro.comando(cerebro.norm('Troca pro Codecs.')), ('troca', 'codex', 'sol'))
+        self.assertEqual(cerebro.comando(cerebro.norm('Muda pra Anthropic no modelo sonnet 5 alto')), ('troca', 'claude', 'sonnet'))
+        self.assertEqual(cerebro.comando(cerebro.norm('qual cérebro tá ligado?')), ('status',))
+        self.assertIsNone(cerebro.comando(cerebro.norm('liga o carro da garagem')))
+        self.assertIsNone(cerebro.comando(cerebro.norm('usa o código que te mandei ontem')))
+        self.assertIsNone(cerebro.comando(cerebro.norm('x' * 130 + ' troca pro codex')))
+
+    def test_v1_state_migrates_without_losing_codex_thread(self):
+        Path(cerebro.SF).write_text(json.dumps({'empresa': 'openai', 'modelo': 'gpt-6-astra', 'thread': 'th-1'}), encoding='utf-8')
+        st = cerebro.load()
+        self.assertEqual(st['versao'], 2); self.assertEqual(st['ativo'], 'codex'); self.assertEqual(st['codex']['thread'], 'th-1'); self.assertEqual(st['codex']['modelo'], 'gpt-6-astra')
+
+    def test_windows_cmd_uses_node_without_shell(self):
+        with patch.object(cerebro, 'CODEX', str(self.root / 'codex.cmd')), patch.object(cerebro.shutil, 'which', return_value='node.exe'), patch.object(cerebro.os.path, 'isfile', return_value=True):
+            cmd = cerebro.codex_command()
+            self.assertEqual(cmd[0], 'node.exe'); self.assertTrue(cmd[1].endswith('codex.js'))
+
+    def test_unknown_windows_wrapper_fails_closed(self):
+        with patch.object(cerebro, 'CODEX', str(self.root / 'codex.cmd')), patch.object(cerebro.shutil, 'which', return_value=None):
+            with self.assertRaises(RuntimeError): cerebro.codex_command()
+
+
+class JanelaTests(unittest.TestCase):
+    """a janela é dona do bot: recebe, enfileira antes do ACK, transcreve, entrega com recibo."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name); s = str(self.root / 's')
+        self.patches = [patch.object(janela, 'STATE', s), patch.object(janela, 'INBOX', s + '/inbox'), patch.object(janela, 'OFFSET', s + '/offset'), patch.object(janela, 'LOGF', s + '/log'),
+                        patch.object(cerebro, 'STATE', s), patch.object(cerebro, 'SF', s + '/cerebro.json'), patch.object(cerebro, 'CONVERSA', s + '/conversa.jsonl'), patch.object(cerebro, 'LOGF', s + '/clog'),
+                        patch.object(cerebro, 'CLAUDE', str(self.root / 'nao')), patch.object(cerebro, 'CODEX', str(self.root / 'nao')), patch.object(cerebro, 'OS_DIR', str(self.root)),
+                        patch.object(janela, 'dono', return_value='555')]
+        for p in self.patches: p.start()
+        cerebro.save(cerebro.novo_estado('claude', 'codex'))
+        self.calls = []
+        def fake_api(method, fields=None, files=None, max_time=60, tok=None):
+            self.calls.append((method, dict(fields or {})))
+            return {'ok': True, 'result': {'message_id': len(self.calls), 'file_path': 'voice/x.oga'}}
+        self.patches.append(patch.object(janela, 'api', side_effect=fake_api)); self.patches[-1].start()
+        self.patches.append(patch.object(janela, 'baixar', side_effect=lambda fid, dest: (Path(dest).parent.mkdir(parents=True, exist_ok=True), Path(dest).write_bytes(b'x'), dest)[2])); self.patches[-1].start()
+
+    def tearDown(self):
+        for p in self.patches: p.stop()
+        self.tmp.cleanup()
+
+    def sent(self): return [f.get('text', '') for m, f in self.calls if m == 'sendMessage']
+
+    def test_enqueue_happens_before_offset_and_reply(self):
+        janela.receber({'update_id': 7, 'message': {'message_id': 13, 'chat': {'id': 555}, 'text': 'oi'}})
+        q = Queue(janela.STATE); self.assertEqual(q.status('555:13'), 'queued')
+        self.assertIn('setMessageReaction', [m for m, _ in self.calls]); self.assertEqual(self.sent(), [])
+
+    def test_missing_owner_fails_closed_into_pairing(self):
+        with patch.object(janela, 'dono', return_value=''), patch.object(janela, 'gravar_dono', return_value=True):
+            janela.CODIGO['valor'] = None
+            janela.receber({'update_id': 1, 'message': {'message_id': 1, 'chat': {'id': 999}, 'text': 'troca pro codex'}})
+            self.assertIsNone(Queue(janela.STATE).status('999:1')); self.assertIn('código', self.sent()[-1])
+
+    def test_other_chat_ignored(self):
+        janela.receber({'update_id': 1, 'message': {'message_id': 1, 'chat': {'id': 666}, 'text': 'oi'}})
+        self.assertIsNone(Queue(janela.STATE).status('666:1')); self.assertEqual(self.sent(), [])
+
+    def test_delivery_with_receipt_and_signature(self):
+        janela.receber({'update_id': 1, 'message': {'message_id': 2, 'chat': {'id': 555}, 'text': 'oi'}})
+        with patch.object(cerebro, 'FAKE_CLAUDE', 'resposta'):
+            Queue(janela.STATE).drain(janela.executar, janela.recuperado)
+        self.assertEqual(Queue(janela.STATE).status('555:2'), 'completed'); self.assertIn('🟣', self.sent()[-1])
+        with Queue(janela.STATE).connect() as db: self.assertGreaterEqual(db.execute('SELECT COUNT(*) FROM receipts').fetchone()[0], 1)
+
+    def test_unconfirmed_send_marks_uncertain(self):
+        janela.receber({'update_id': 1, 'message': {'message_id': 3, 'chat': {'id': 555}, 'text': 'oi'}})
+        def api_sem_id(method, fields=None, files=None, max_time=60, tok=None): return {'ok': True, 'result': {}}
+        with patch.object(cerebro, 'FAKE_CLAUDE', 'resposta'), patch.object(janela, 'api', side_effect=api_sem_id):
+            Queue(janela.STATE).drain(janela.executar, janela.recuperado)
+        self.assertEqual(Queue(janela.STATE).status('555:3'), 'uncertain')
+
+    def test_audio_chain_order_and_honest_fallback(self):
+        order = []
+        with patch.object(janela, '_stt_mlx', side_effect=lambda p: order.append('mlx') or None), \
+             patch.object(janela, '_stt_cpu', side_effect=lambda p: order.append('cpu') or ''), \
+             patch.object(janela, 'segredo', side_effect=lambda nome, var: 'k' if var == 'GROQ_API_KEY' else ''), \
+             patch.object(janela, '_stt_http', side_effect=lambda p, url, k, m: order.append(m) or 'texto ouvido'):
+            f = self.root / 'a.oga'; f.write_bytes(b'x')
+            self.assertEqual(janela.transcrever(str(f)), 'texto ouvido'); self.assertEqual(order, ['mlx', 'whisper-large-v3-turbo'])
+        # 4.4.2: whisper de CPU (lento, ~1 min por áudio) vira o último recurso, depois das chaves
+        order.clear()
+        with patch.object(janela, '_stt_mlx', side_effect=lambda p: order.append('mlx') or None), \
+             patch.object(janela, '_stt_cpu', side_effect=lambda p: order.append('cpu') or 'ouvido na cpu'), \
+             patch.object(janela, 'segredo', side_effect=lambda nome, var: 'k'), \
+             patch.object(janela, '_stt_http', side_effect=lambda p, url, k, m: order.append(m) or ''):
+            self.assertEqual(janela.transcrever(str(f)), 'ouvido na cpu')
+            self.assertEqual(order, ['mlx', 'whisper-1', 'whisper-large-v3-turbo', 'cpu'])
+        janela.receber({'update_id': 1, 'message': {'message_id': 4, 'chat': {'id': 555}, 'voice': {'file_id': 'v'}}})
+        with patch.object(janela, 'tem_stt', return_value=False), patch.object(cerebro, 'FAKE_CLAUDE', 'nunca'):
+            Queue(janela.STATE).drain(janela.executar, janela.recuperado)
+        self.assertIn('manda em texto', self.sent()[-1].lower()); self.assertNotIn('nunca', ' '.join(self.sent()))
+
+    def _mlx_fake(self, comportamento, calls):
+        """imita o mlx_whisper REAL: volta rc 0 mesmo quando pula o arquivo (medido 28/09); o que vale é a saída e o stderr."""
+        def run(cmd, capture_output=True, text=False, encoding=None, errors=None, timeout=None, env=None):
+            calls.append((cmd, env, timeout))
+            acao = comportamento(cmd, env)
+            if isinstance(acao, BaseException): raise acao
+            if acao is None or acao.startswith('ERRO:'):
+                return subprocess.CompletedProcess(cmd, 0, '', (acao or '')[5:])
+            d = cmd[cmd.index('--output-dir') + 1]; Path(d, 'out.txt').write_text(acao, encoding='utf-8')
+            return subprocess.CompletedProcess(cmd, 0, '', '')
+        return run
+
+    def test_mlx_model_explicit_offline_first(self):
+        """4.4.2: sem --model o mlx_whisper usa o tiny. Modelo explícito; sem rede primeiro; rede SÓ com modelo ausente provado."""
+        f = self.root / 'a.oga'; f.write_bytes(b'x'); calls = []
+        falta = 'ERRO:huggingface_hub.errors.LocalEntryNotFoundError: Cannot find an appropriate cached snapshot folder'
+        comp = lambda cmd, env: falta if env.get('HF_HUB_OFFLINE') == '1' else 'ouvido no mlx'
+        with patch.object(janela, '_mlx_candidatos', return_value=['/x/mlx_whisper']), patch.object(janela.subprocess, 'run', side_effect=self._mlx_fake(comp, calls)):
+            self.assertEqual(janela._stt_mlx(str(f)), 'ouvido no mlx')
+        self.assertEqual(len(calls), 2)
+        for cmd, env, _ in calls:
+            self.assertEqual(cmd[cmd.index('--model') + 1], 'mlx-community/whisper-large-v3-turbo')
+            self.assertEqual(env.get('HF_HUB_DISABLE_TELEMETRY'), '1')
+        self.assertEqual(calls[0][1].get('HF_HUB_OFFLINE'), '1'); self.assertNotIn('HF_HUB_OFFLINE', calls[1][1])
+        self.assertGreaterEqual(calls[0][2], 900)  # a tentativa sem rede É a transcrição: áudio longo legítimo cabe (rodada 2)
+        # modelo baixado + áudio em silêncio: resposta vazia É resposta (não sobe o áudio pra API); saída velha não vale
+        calls.clear(); (Path(janela.STATE) / 'stt').mkdir(parents=True, exist_ok=True); (Path(janela.STATE) / 'stt' / 'out.txt').write_text('velho', encoding='utf-8')
+        with patch.object(janela, '_mlx_candidatos', return_value=['/x/mlx_whisper']), patch.object(janela.subprocess, 'run', side_effect=self._mlx_fake(lambda c, e: '', calls)):
+            self.assertEqual(janela._stt_mlx(str(f)), '')
+        self.assertEqual(len(calls), 1)
+
+    def test_mlx_inherited_offline_env_still_downloads(self):
+        """rodada 2: janela que herda HF_HUB_OFFLINE=1 não pode ficar sem rede na tentativa autorizada a baixar."""
+        f = self.root / 'a.oga'; f.write_bytes(b'x'); calls = []
+        falta = 'ERRO:LocalEntryNotFoundError: Cannot find an appropriate cached snapshot folder'
+        comp = lambda cmd, env: falta if env.get('HF_HUB_OFFLINE') == '1' else 'baixou e ouviu'
+        with patch.dict(os.environ, {'HF_HUB_OFFLINE': '1'}), patch.object(janela, '_mlx_candidatos', return_value=['/x/mlx_whisper']), \
+             patch.object(janela.subprocess, 'run', side_effect=self._mlx_fake(comp, calls)):
+            self.assertEqual(janela._stt_mlx(str(f)), 'baixou e ouviu')
+        self.assertEqual(len(calls), 2); self.assertNotIn('HF_HUB_OFFLINE', calls[1][1])
+
+    def test_mlx_candidates_dedup_alias(self):
+        """rodada 2: o PATH apontando (symlink) pro mesmo executável do venv não entra duas vezes."""
+        exe = self.root / 'mlx_whisper'; exe.write_text('#!/bin/sh\n'); exe.chmod(0o755)
+        alias = self.root / 'bin-alias'
+        try: alias.symlink_to(exe)
+        except (OSError, NotImplementedError): self.skipTest('symlink exige permissão especial neste sistema (Windows)')
+        with patch.object(janela, 'STT_VENV', str(exe)), patch.object(janela.shutil, 'which', return_value=str(alias)), patch.object(janela.sys, 'platform', 'darwin'):
+            self.assertEqual(janela._mlx_candidatos(), [str(exe)])
+
+    def test_mlx_timeout_never_retries(self):
+        f = self.root / 'a.oga'; f.write_bytes(b'x'); calls = []
+        trava = lambda cmd, env: subprocess.TimeoutExpired(cmd, 180)
+        with patch.object(janela, '_mlx_candidatos', return_value=['/venv/mlx_whisper', '/path/mlx_whisper']), patch.object(janela.subprocess, 'run', side_effect=self._mlx_fake(trava, calls)):
+            self.assertIsNone(janela._stt_mlx(str(f)))
+        self.assertEqual(len(calls), 1)  # travou uma vez: próximo provedor, sem 2ª espera nem com rede
+
+    def test_mlx_broken_venv_falls_back_to_path(self):
+        f = self.root / 'a.oga'; f.write_bytes(b'x'); calls = []
+        def comp(cmd, env):
+            if cmd[0] == '/venv/mlx_whisper': return FileNotFoundError(2, 'interpretador do venv sumiu')
+            return 'ouvido no mlx do PATH'
+        with patch.object(janela, '_mlx_candidatos', return_value=['/venv/mlx_whisper', '/path/mlx_whisper']), patch.object(janela.subprocess, 'run', side_effect=self._mlx_fake(comp, calls)):
+            self.assertEqual(janela._stt_mlx(str(f)), 'ouvido no mlx do PATH')
+        # instalação pela metade (import quebra, sem saída, sem "modelo ausente"): não vai à rede, tenta o próximo
+        calls.clear()
+        comp2 = lambda cmd, env: 'ERRO:ModuleNotFoundError: No module named torch' if cmd[0] == '/venv/mlx_whisper' else 'ok do PATH'
+        with patch.object(janela, '_mlx_candidatos', return_value=['/venv/mlx_whisper', '/path/mlx_whisper']), patch.object(janela.subprocess, 'run', side_effect=self._mlx_fake(comp2, calls)):
+            self.assertEqual(janela._stt_mlx(str(f)), 'ok do PATH')
+        self.assertEqual([c[0][0] for c in calls], ['/venv/mlx_whisper', '/path/mlx_whisper'])
+        # nenhum mlx serve: None (a cadeia segue pras chaves e pro CPU)
+        with patch.object(janela, '_mlx_candidatos', return_value=['/venv/mlx_whisper']), patch.object(janela.subprocess, 'run', side_effect=self._mlx_fake(lambda c, e: FileNotFoundError(2, 'x'), [])):
+            self.assertIsNone(janela._stt_mlx(str(f)))
+
+    def test_mlx_silence_does_not_upload(self):
+        f = self.root / 'a.oga'; f.write_bytes(b'x'); http = []
+        with patch.object(janela, '_stt_mlx', return_value=''), patch.object(janela, 'segredo', return_value='k'), \
+             patch.object(janela, '_stt_http', side_effect=lambda *a: http.append(a) or 'da api'), patch.object(janela, '_stt_cpu', return_value='cpu'):
+            self.assertEqual(janela.transcrever(str(f)), '')
+        self.assertEqual(http, [])
+
+    def test_mlx_candidates_venv_first_mac_only(self):
+        exe = self.root / 'mlx_whisper'; exe.write_text('#!/bin/sh\n'); exe.chmod(0o755)
+        with patch.object(janela, 'STT_VENV', str(exe)), patch.object(janela.shutil, 'which', return_value='/usr/local/bin/mlx_whisper'):
+            with patch.object(janela.sys, 'platform', 'darwin'): self.assertEqual(janela._mlx_candidatos(), [str(exe), '/usr/local/bin/mlx_whisper'])
+            with patch.object(janela.sys, 'platform', 'win32'): self.assertEqual(janela._mlx_candidatos(), ['/usr/local/bin/mlx_whisper'])
+        with patch.object(janela, 'STT_VENV', str(exe)), patch.object(janela.shutil, 'which', return_value=str(exe)), patch.object(janela.sys, 'platform', 'darwin'):
+            self.assertEqual(janela._mlx_candidatos(), [str(exe)])  # mesmo executável não entra duas vezes
+        with patch.object(janela, 'STT_VENV', str(self.root / 'nao-existe')), patch.object(janela.shutil, 'which', return_value=None), patch.object(janela.sys, 'platform', 'darwin'):
+            self.assertEqual(janela._mlx_candidatos(), [])
+
+    def test_spoken_command_switches_engine(self):
+        janela.receber({'update_id': 1, 'message': {'message_id': 5, 'chat': {'id': 555}, 'voice': {'file_id': 'v'}}})
+        with patch.object(janela, 'tem_stt', return_value=True), patch.object(janela, 'transcrever', return_value='troca pro codex'), patch.object(cerebro, 'FAKE_CLAUDE', 'resumo'):
+            Queue(janela.STATE).drain(janela.executar, janela.recuperado)
+        self.assertEqual(cerebro.load()['ativo'], 'codex')
+
+    def test_engine_failure_is_uncertain_and_never_replayed(self):
+        janela.receber({'update_id': 1, 'message': {'message_id': 6, 'chat': {'id': 555}, 'text': 'faz'}})
+        Queue(janela.STATE).drain(janela.executar, janela.recuperado)
+        self.assertEqual(Queue(janela.STATE).status('555:6'), 'uncertain'); n = len(self.sent())
+        Queue(janela.STATE).drain(janela.executar, janela.recuperado); self.assertEqual(len(self.sent()), n)
+
+    def test_second_window_is_refused(self):
+        from telegram_runtime import lock, Busy
+        Path(janela.STATE).mkdir(parents=True, exist_ok=True)
+        with lock(str(Path(janela.STATE) / 'janela.lock')):
+            with patch.object(janela, 'ler_token', return_value='t'):
+                self.assertEqual(janela.janela(), 3)
+
+    def test_conflict_409_stops_window(self):
+        def api409(method, fields=None, files=None, max_time=60, tok=None): return {'ok': False, 'error_code': 409, 'description': 'Conflict: terminated by other getUpdates request'}
+        with patch.object(janela, 'api', side_effect=api409), patch.object(janela, 'ler_token', return_value='t'), patch.object(janela.time, 'sleep'), patch.object(janela, 'executor_loop', lambda parar: None):
+            self.assertEqual(janela.janela(), 2)
+
+
+class PluginRemedioTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_plugin_patch_idempotent_and_revert_preserves_new_code(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
+        server.parent.mkdir(parents=True)
+        original = '        const text = args.text as string\n' + '  while (rest.length > limit) {\n    out.push(rest.slice(0, cut))\n  }\n'
+        server.write_text(original, encoding='utf-8')
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        def run(*args):
+            return subprocess.run(cmd + list(args), env=env, capture_output=True, encoding='utf-8')
+        self.assertEqual(run().returncode, 0)
+        first = server.read_bytes(); self.assertEqual(run().returncode, 0)
+        self.assertEqual(server.read_bytes(), first); self.assertEqual(run('--check').returncode, 0)
+        with server.open('a', encoding='utf-8') as f: f.write('// unrelated upstream fix\n')
+        self.assertEqual(run('--revert').returncode, 0)
+        self.assertEqual(server.read_text(), original + '// unrelated upstream fix\n')
+
+    def test_both_remedies_applied_and_check_needs_both(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
+        server.parent.mkdir(parents=True)
+        server.write_bytes(b'        const text = args.text as string\n    out.push(rest.slice(0, cut))\n')  # LF explícito (write_text vira CRLF no Windows)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        s = server.read_text(encoding='utf-8')
+        self.assertIn('MESTREOS-REMEDIO-UNDEFINED', s); self.assertIn('MESTREOS-REMEDIO-EMOJI', s)
+        self.assertIn('rest.charCodeAt(cut - 1) >= 0xd800', s)
+        self.assertNotIn(b'\r\n', server.read_bytes())  # arquivo LF continua LF (o de CRLF tem teste próprio)
+
+    def test_crlf_file_keeps_crlf_and_revert_is_byte_identical(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/win/server.ts'
+        server.parent.mkdir(parents=True)
+        original = b'// cabecalho\r\n        const text = args.text as string\r\n    out.push(rest.slice(0, cut))\r\n// fim\r\n'
+        server.write_bytes(original)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        b = server.read_bytes()
+        self.assertIn(b'MESTREOS-REMEDIO-EMOJI', b); self.assertIn(b'MESTREOS-REMEDIO-UNDEFINED', b)
+        self.assertEqual(b.count(b'\n'), b.count(b'\r\n'))  # nenhuma linha virou LF
+        self.assertTrue(b.startswith(b'// cabecalho\r\n') and b.endswith(b'// fim\r\n'))
+        self.assertEqual(subprocess.run(cmd + ['--revert'], env=env, capture_output=True).returncode, 0)
+        self.assertEqual(server.read_bytes(), original)
+
+    def test_equivalent_owner_fix_is_not_stacked(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/dono/server.ts'
+        server.parent.mkdir(parents=True)
+        dono = ('        const text = (args.text ?? (args as Record<string, unknown>).message) as string // PATCH DO DONO\n'
+                '    if (cut > 1 && rest.charCodeAt(cut - 1) >= 0xd800 && rest.charCodeAt(cut - 1) <= 0xdbff) cut-- // PATCH DO DONO\n'
+                '    out.push(rest.slice(0, cut))\n')
+        server.write_text(dono, encoding='utf-8')
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        self.assertEqual(server.read_text(encoding='utf-8'), dono)
+        self.assertEqual(subprocess.run(cmd + ['--check'], env=env, capture_output=True).returncode, 0)
+
+    def test_partial_plugin_applies_known_and_flags_unknown(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/partial/server.ts'
+        server.parent.mkdir(parents=True); server.write_text('        const text = args.text as string\n', encoding='utf-8')
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
+        r = subprocess.run(cmd, env=env, capture_output=True, encoding='utf-8')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('MESTREOS-REMEDIO-UNDEFINED', server.read_text(encoding='utf-8'))
+        self.assertNotEqual(subprocess.run(cmd + ['--check'], env=env, capture_output=True).returncode, 0)
+
+    def test_unknown_plugin_version_is_not_modified(self):
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/new/server.ts'
+        server.parent.mkdir(parents=True); server.write_text('const totallyDifferent = true;\n')
+        original = server.read_bytes()
+        r = subprocess.run([sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')],
+                           env=dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root)), capture_output=True)
+        self.assertNotEqual(r.returncode, 0); self.assertEqual(server.read_bytes(), original)
+
+
+if __name__ == '__main__': unittest.main()
