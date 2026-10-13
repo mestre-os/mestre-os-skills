@@ -4,7 +4,7 @@
   "files": {
     ".meuos/hooks/cerebro.py": "ea48c22abf824f4c38a36268f4614aef2be04201ce7183ef4bb9e042b0c85548",
     ".meuos/hooks/telegram_runtime.py": "d3609ad79379b74fc7d688a25f506bf5094c8292510e1276115af99a6f40560f",
-    ".meuos/scripts/telegram_janela.py": "610bbe5f54f9169d2a1382b3f2236cb34cc8619378bf4005360d2979d5304853",
+    ".meuos/scripts/telegram_janela.py": "e0c5cbda1dd0b326431dbbd0151068705c618ad7f0ee557e5f469a1cfafd588a",
     ".meuos/scripts/test-telegram-runtime.py": "5ca428de16adbc60b6649930431e91c04b5e8308677f7ce50a7e219e23deefa3",
     ".meuos/scripts/telegram-recovery.py": "96a8e9238af1cc62369f77504786c4d3b34b40fdb36844104c8fca32f33e3cf9",
     ".meuos/scripts/telegram_send.py": "f872c7f2295fc7ac056f9b40cd39dc0288c1035e49a7ccc1c0218546e0a10ae2",
@@ -12,8 +12,8 @@
     ".meuos/scripts/telegram-plugin-remedio.py": "745a0fdb240bbeef6c00c70f11d174dfa52a969b354701965c1048c475a98387"
   },
   "validation": {
-    "mac": "31 cerebro + 37 janela + 44 unittest offline checks passed, macOS Python 3.9.6 (13/10/2026)",
-    "windows": "31 cerebro + 37 janela + 44 unittest (1 skipped: bun not installed in the VM) offline checks passed, Windows 11 ARM Python 3.12.10, identical file hashes (13/10/2026)",
+    "mac": "31 cerebro + 41 janela + 44 unittest offline checks passed, macOS Python 3.9.6 (13/10/2026)",
+    "windows": "31 cerebro + 41 janela + 44 unittest (1 skipped: bun not installed in the VM) offline checks passed, Windows 11 ARM Python 3.12.10, identical file hashes (13/10/2026)",
     "live_per_account": "required during installation (7D.9 on the phone, both directions)"
   }
 }

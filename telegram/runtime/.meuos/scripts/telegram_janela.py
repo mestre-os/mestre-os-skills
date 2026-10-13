@@ -14,7 +14,7 @@ Transcrição de áudio, em cadeia: mlx_whisper local (Mac; ~/.mestreos/stt ou P
 grátis) → whisper de CPU (lento, último recurso) → sem nenhum: responde honesto "manda em texto". Chaves: variável · Keychain (openai-api-key / groq-api-key) · DPAPI ·
 linhas OPENAI_API_KEY= / GROQ_API_KEY= no mesmo ~/.claude/channels/telegram/.env do token.
 """
-import json, os, re, sys, subprocess, time, threading, random, string, shutil, platform
+import json, os, re, sys, subprocess, time, threading, random, string, shutil, platform, urllib.parse, urllib.request
 AQUI = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, AQUI); sys.path.insert(0, os.path.join(os.path.dirname(AQUI), "hooks"))
 for _s in (sys.stdout, sys.stderr, sys.stdin):
@@ -306,8 +306,48 @@ def texto_rich(rm):
     anda(rm.get("blocks", rm) if isinstance(rm, dict) else rm)
     return "\n\n".join(linhas).strip()
 
+# 4.0.3 (13/10/26): localização (ponto, lugar da lista e ao vivo) virava "tipo que eu não sei ler". Agora vira texto com
+# endereço legível (OpenStreetMap, sem chave, 4 s de teto; sem rede = só coordenadas) e link do mapa. Ao vivo: as
+# atualizações (edited_message) só regravam a última posição em disco, sem acordar o cérebro a cada passo.
+LOCAL_GEO = os.environ.get("MESTREOS_LOCAL_GEO", "https://nominatim.openstreetmap.org/reverse")
+
+def local_endereco(lat, lon):
+    try:
+        url = f"{LOCAL_GEO}?" + urllib.parse.urlencode({"format": "jsonv2", "zoom": 18, "accept-language": "pt-BR", "lat": lat, "lon": lon})
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "mestreos-janela/1.0"}), timeout=4) as r:
+            return re.sub(r"\s+", " ", str(json.load(r).get("display_name") or ""))[:200]
+    except Exception:
+        return ""
+
+def local_salva(l, ao_vivo):
+    try:
+        tmp = os.path.join(STATE, "ultima-localizacao.json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"lat": l.get("latitude"), "lon": l.get("longitude"), "precisao_m": l.get("horizontal_accuracy"),
+                       "ao_vivo": ao_vivo, "quando": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
+        os.replace(tmp, os.path.join(STATE, "ultima-localizacao.json"))
+    except Exception as e:
+        log(f"não gravei a localização: {e!r}")
+
+def texto_local(msg):
+    v = msg.get("venue") or {}; l = v.get("location") or msg.get("location") or {}
+    try: lat, lon = float(l["latitude"]), float(l["longitude"])
+    except (KeyError, TypeError, ValueError): return ""
+    ao_vivo = (l.get("live_period") or 0) > 0
+    local_salva(l, ao_vivo)
+    nome = " · ".join(x for x in (v.get("title"), v.get("address")) if x)
+    end = nome or local_endereco(lat, lon)
+    prec = f" (precisão ~{round(l['horizontal_accuracy'])} m)" if (l.get("horizontal_accuracy") or 0) > 0 else ""
+    vivo = (f" Localização AO VIVO por {round(l['live_period'] / 60)} min: a posição mais nova fica em "
+            f"{os.path.join(STATE, 'ultima-localizacao.json')}.") if ao_vivo else ""
+    return (f"[localização enviada pelo dono: {end or 'endereço não encontrado'} · {lat:.6f}, {lon:.6f}{prec} · "
+            f"https://maps.google.com/?q={lat},{lon}.{vivo}]")
+
 def texto_da_mensagem(msg):
     """Texto que vai pro cérebro: text/legenda; senão o rich_message achatado; senão (tipo que a janela não lê) uma nota."""
+    if msg.get("location") or msg.get("venue"):
+        local = texto_local(msg)
+        if local: return local + ("\n" + msg["caption"] if msg.get("caption") else "")
     texto = msg.get("text") or msg.get("caption") or ""
     if texto or any(msg.get(k) for k in LIDOS): return texto
     if msg.get("rich_message"):
@@ -339,7 +379,12 @@ def respondendo_a(msg):
 
 def receber(update):
     if update.get("message_reaction"): reacao_do_dono(update["message_reaction"]); return
-    msg = update.get("message") or update.get("edited_message")
+    ed = update.get("edited_message")
+    if ed:  # 4.0.3: só a localização ao vivo andando interessa; outra edição não vira pedido novo
+        if ed.get("location") and str((ed.get("chat") or {}).get("id", "")) == dono() and str((ed.get("from") or {}).get("id", "")) == dono():
+            local_salva(ed["location"], True)
+        return
+    msg = update.get("message")
     if not msg: return
     chat = str(msg.get("chat", {}).get("id", "")); mid = msg.get("message_id"); texto = msg.get("text") or msg.get("caption") or ""
     d = dono()
@@ -501,7 +546,7 @@ def janela():
             offset = ler_offset(); erros409 = 0
             try:
                 while True:
-                    r = api("getUpdates", {"offset": offset, "timeout": POLL, "allowed_updates": json.dumps(["message", "message_reaction"])}, max_time=POLL + 15)
+                    r = api("getUpdates", {"offset": offset, "timeout": POLL, "allowed_updates": json.dumps(["message", "edited_message", "message_reaction"])}, max_time=POLL + 15)
                     if not r.get("ok"):
                         if r.get("error_code") == 409 or "409" in str(r.get("description", "")) or "Conflict" in str(r.get("description", "")):
                             erros409 += 1
@@ -706,6 +751,26 @@ def teste():
     chk("36 assinatura: quem respondeu é o modelo que mais gastou, não o Haiku interno que vem por último (empate: mais texto)",
         cerebro.modelo_que_respondeu(uso) == "claude-opus-5-5" and cerebro.modelo_que_respondeu(empate) == "claude-sonnet-5-5"
         and cerebro.modelo_que_respondeu({"claude-opus-5-5": None}) == "claude-opus-5-5")
+    # ---- 4.0.3 (13/10/26): localização (ponto, lugar da lista, ao vivo) vira texto com endereço, nunca "tipo que não sei ler" ----
+    global local_endereco
+    geo = []; local_endereco = lambda lat, lon: (geo.append((lat, lon)), "Sea Rock Rose Trail, Kissimmee, Florida")[1]
+    receber({"update_id": 50, "message": {"message_id": 500, "chat": {"id": 555}, "location": {"latitude": 28.2919, "longitude": -81.6512, "horizontal_accuracy": 12}}})
+    t = texto_na_fila(500) or ""
+    chk("37 localização vira texto com endereço, coordenadas e link do mapa (não nota de tipo desconhecido)",
+        "Kissimmee" in t and "28.291900, -81.651200" in t and "maps.google.com/?q=28.2919,-81.6512" in t and "~12 m" in t and "nota da janela" not in t)
+    geo.clear()
+    receber({"update_id": 51, "message": {"message_id": 501, "chat": {"id": 555}, "venue": {"location": {"latitude": 28.3, "longitude": -81.6}, "title": "Publix", "address": "14928 E Orange Lake Blvd"}}})
+    chk("38 lugar da lista (venue) usa o nome e o endereço dele, sem consultar o mapa", "Publix · 14928 E Orange Lake Blvd" in (texto_na_fila(501) or "") and not geo)
+    local_endereco = lambda lat, lon: ""
+    receber({"update_id": 52, "message": {"message_id": 502, "chat": {"id": 555}, "location": {"latitude": -19.93, "longitude": -43.94, "live_period": 3600}}})
+    t = texto_na_fila(502) or ""; salvo = json.load(open(os.path.join(STATE, "ultima-localizacao.json")))
+    chk("39 sem rede: só coordenadas; ao vivo avisa onde fica a posição nova e grava a última", "endereço não encontrado" in t and "AO VIVO por 60 min" in t and salvo["lat"] == -19.93 and salvo["ao_vivo"])
+    receber({"update_id": 53, "edited_message": {"message_id": 502, "chat": {"id": 555}, "from": {"id": 555}, "location": {"latitude": -19.94, "longitude": -43.95}}})
+    receber({"update_id": 54, "edited_message": {"message_id": 503, "chat": {"id": 666}, "from": {"id": 666}, "location": {"latitude": 1, "longitude": 1}}})
+    receber({"update_id": 55, "edited_message": {"message_id": 301, "chat": {"id": 555}, "from": {"id": 555}, "text": "oi de novo editado"}})
+    salvo = json.load(open(os.path.join(STATE, "ultima-localizacao.json")))
+    chk("40 ao vivo andando só regrava a posição; estranho não mexe; edição de texto não vira pedido novo",
+        salvo["lat"] == -19.94 and q.status("555:503") is None and texto_na_fila(301) == "oi de novo")
     q.drain(executar, recuperado)
     print(f"----- {ok} ok · {fail} falhas"); return 0 if fail == 0 else 1
 
