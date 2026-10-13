@@ -248,8 +248,7 @@ def motor_claude(st, prompt, imagens, batimento=None):
         if isinstance(d, dict) and d.get("type") == "result":
             resp = (d.get("result") or "").strip(); ok = not d.get("is_error") and d.get("subtype") == "success"
             if d.get("session_id"): c["sessao"] = d["session_id"]
-            usados = list((d.get("modelUsage") or {}).keys())
-            if usados: c["modelo"] = usados[-1]
+            if d.get("modelUsage"): c["modelo"] = modelo_que_respondeu(d["modelUsage"])
             if not ok: erro = d.get("subtype") or "erro"
     if r.returncode != 0 and not resp:
         m = re.search(r"(?i)(error|erro)[^\n]{0,160}", r.stderr or ""); erro = erro or (m.group(0) if m else f"código {r.returncode}")
@@ -259,6 +258,11 @@ def motor_claude(st, prompt, imagens, batimento=None):
     if (not ok or not resp or r.returncode != 0) and causa_conhecida(bruto): return False, "", [], bruto[-600:]
     if not ok or not resp: return False, "", [], erro or "sem resposta"
     return True, resp, novos_arquivos(antes), ""
+
+def modelo_que_respondeu(uso):
+    """O Claude Code usa o Haiku escondido (título, resumo) e ele costuma vir por ÚLTIMO no modelUsage: quem respondeu é o
+    que mais gastou (empate: mais texto escrito). 12/10/26, achado e correção de um aluno: a assinatura dizia Haiku com o Opus."""
+    return max(uso, key=lambda k: ((uso[k] or {}).get("costUSD") or 0, (uso[k] or {}).get("outputTokens") or 0))
 
 def _run_stdin(cmd, prompt):
     """activity_run com o prompt pelo stdin (nunca no argv: no Windows o claude.cmd passa por cmd.exe)."""

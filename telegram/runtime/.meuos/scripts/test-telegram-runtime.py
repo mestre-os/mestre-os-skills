@@ -412,7 +412,7 @@ class PluginRemedioTests(unittest.TestCase):
     def test_plugin_patch_idempotent_and_revert_preserves_new_code(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
         server.parent.mkdir(parents=True)
-        original = '        const text = args.text as string\n' + '  while (rest.length > limit) {\n    out.push(rest.slice(0, cut))\n  }\n'
+        original = '        const text = args.text as string\n' + '  while (rest.length > limit) {\n    out.push(rest.slice(0, cut))\n  }\n' + 'type AttachmentMeta = {\n'
         server.write_text(original, encoding='utf-8')
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
@@ -428,25 +428,26 @@ class PluginRemedioTests(unittest.TestCase):
     def test_both_remedies_applied_and_check_needs_both(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
         server.parent.mkdir(parents=True)
-        server.write_bytes(b'        const text = args.text as string\n    out.push(rest.slice(0, cut))\n')  # LF explícito (write_text vira CRLF no Windows)
+        server.write_bytes(b'        const text = args.text as string\n    out.push(rest.slice(0, cut))\ntype AttachmentMeta = {\n')  # LF explícito (write_text vira CRLF no Windows)
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
         self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
         s = server.read_text(encoding='utf-8')
         self.assertIn('MESTREOS-REMEDIO-UNDEFINED', s); self.assertIn('MESTREOS-REMEDIO-EMOJI', s)
         self.assertIn('rest.charCodeAt(cut - 1) >= 0xd800', s)
+        self.assertIn('MESTREOS-REMEDIO-RICH', s)  # 3º remédio (09/10/26): texto formatado
         self.assertNotIn(b'\r\n', server.read_bytes())  # arquivo LF continua LF (o de CRLF tem teste próprio)
 
     def test_crlf_file_keeps_crlf_and_revert_is_byte_identical(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/win/server.ts'
         server.parent.mkdir(parents=True)
-        original = b'// cabecalho\r\n        const text = args.text as string\r\n    out.push(rest.slice(0, cut))\r\n// fim\r\n'
+        original = b'// cabecalho\r\n        const text = args.text as string\r\n    out.push(rest.slice(0, cut))\r\ntype AttachmentMeta = {\r\n// fim\r\n'
         server.write_bytes(original)
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
         self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
         b = server.read_bytes()
-        self.assertIn(b'MESTREOS-REMEDIO-EMOJI', b); self.assertIn(b'MESTREOS-REMEDIO-UNDEFINED', b)
+        self.assertIn(b'MESTREOS-REMEDIO-EMOJI', b); self.assertIn(b'MESTREOS-REMEDIO-UNDEFINED', b); self.assertIn(b'MESTREOS-REMEDIO-RICH', b)
         self.assertEqual(b.count(b'\n'), b.count(b'\r\n'))  # nenhuma linha virou LF
         self.assertTrue(b.startswith(b'// cabecalho\r\n') and b.endswith(b'// fim\r\n'))
         self.assertEqual(subprocess.run(cmd + ['--revert'], env=env, capture_output=True).returncode, 0)
@@ -457,7 +458,9 @@ class PluginRemedioTests(unittest.TestCase):
         server.parent.mkdir(parents=True)
         dono = ('        const text = (args.text ?? (args as Record<string, unknown>).message) as string // PATCH DO DONO\n'
                 '    if (cut > 1 && rest.charCodeAt(cut - 1) >= 0xd800 && rest.charCodeAt(cut - 1) <= 0xdbff) cut-- // PATCH DO DONO\n'
-                '    out.push(rest.slice(0, cut))\n')
+                '    out.push(rest.slice(0, cut))\n'
+                "bot.on('message', async ctx => { if ((ctx.message as any).rich_message) {} }) // PATCH DO DONO\n"
+                'type AttachmentMeta = {\n')
         server.write_text(dono, encoding='utf-8')
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
@@ -474,6 +477,60 @@ class PluginRemedioTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn('MESTREOS-REMEDIO-UNDEFINED', server.read_text(encoding='utf-8'))
         self.assertNotEqual(subprocess.run(cmd + ['--check'], env=env, capture_output=True).returncode, 0)
+
+    def _plugin_com_handlers(self, nome):
+        server = self.root / f'plugins/cache/claude-plugins-official/telegram/{nome}/server.ts'
+        server.parent.mkdir(parents=True)
+        server.write_bytes(("bot.on('message:text', async ctx => {\n  await handleInbound(ctx, ctx.message.text, undefined)\n})\n"
+                            "bot.on('message:sticker', async ctx => {\n  await handleInbound(ctx, '(sticker)', undefined)\n})\n\n"
+                            "type AttachmentMeta = {\n  kind: string\n}\n").encode('utf-8'))
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        r = subprocess.run([sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')], env=env, capture_output=True, encoding='utf-8')
+        return server, r
+
+    def test_rich_remedy_goes_after_every_plugin_handler(self):
+        # 09/10/26: o handler genérico só pode ver o que nenhum handler do plugin leu; antes deles ele roubaria texto/foto.
+        server, r = self._plugin_com_handlers('ordem')
+        self.assertIn('texto formatado remédio aplicado', r.stdout)   # (os outros 2 remédios não têm âncora nesta fixture)
+        s = server.read_text(encoding='utf-8')
+        self.assertEqual(s.count('MESTREOS-REMEDIO-RICH'), 2)
+        self.assertGreater(s.index("bot.on('message', async ctx"), s.index("bot.on('message:sticker'"))
+        self.assertLess(s.index("bot.on('message', async ctx"), s.index('type AttachmentMeta = {'))
+
+    @unittest.skipUnless(__import__('shutil').which('bun'), 'sem bun nesta máquina (o plugin do Claude roda em bun; teste de comportamento pulado)')
+    def test_rich_remedy_behavior_in_bun(self):
+        # comportamento do bloco remediado: rich_message vira texto; texto/foto não duplicam; tipo desconhecido e rich vazio viram nota
+        server, r = self._plugin_com_handlers('bun')
+        self.assertIn('texto formatado remédio aplicado', r.stdout)   # (os outros 2 remédios não têm âncora nesta fixture)
+        s = server.read_text(encoding='utf-8')
+        bloco = s[s.index('// MESTREOS-REMEDIO-RICH'):s.index('type AttachmentMeta = {')]
+        rich = {'blocks': [{'type': 'paragraph', 'text': 'Oi, segue o plano:'},
+                           {'type': 'list', 'items': [{'label': '1.', 'blocks': [{'type': 'paragraph', 'text': 'Primeiro eu mando.'}]},
+                                                      {'label': '2.', 'blocks': [{'type': 'paragraph', 'text': 'Depois a empresa publica.'}]}]},
+                           {'type': 'paragraph', 'text': 'Um abraço'}]}
+        harness = ("const handlers: any[] = []\nconst bot = { on: (ev: string, fn: any) => { handlers.push([ev, fn]) } }\n"
+                   "const inbound: string[] = []\nasync function handleInbound(_c: any, t: string, _d: any) { inbound.push(t) }\n"
+                   + bloco +
+                   "const h = handlers.find(([ev]) => ev === 'message')![1]\n"
+                   "const msg = (x: any) => ({ message: { message_id: 1, chat: { id: 1 }, from: { id: 42 }, date: 1, ...x } })\n"
+                   "const out: any = {}\n"
+                   f"await h(msg({{ rich_message: {json.dumps(rich, ensure_ascii=False)} }})); out.rich = inbound.splice(0)\n"
+                   "await h(msg({ text: 'oi' })); out.texto = inbound.splice(0)\n"
+                   "await h(msg({ photo: [{}], caption: 'x' })); out.foto = inbound.splice(0)\n"
+                   "await h(msg({ tipo_do_futuro: { a: 1 } })); out.desconhecido = inbound.splice(0)\n"
+                   "await h(msg({ rich_message: { blocks: [] } })); out.vazio = inbound.splice(0)\n"
+                   "console.log(JSON.stringify(out))\n")
+        f = self.root / 'harness.ts'; f.write_text(harness, encoding='utf-8')
+        r = subprocess.run(['bun', str(f)], capture_output=True, encoding='utf-8', timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(len(out['rich']), 1)
+        t = out['rich'][0]
+        self.assertTrue(t.startswith('Oi, segue o plano:') and t.endswith('Um abraço'), t)
+        self.assertIn('1. Primeiro eu mando.', t); self.assertIn('2. Depois a empresa publica.', t)
+        self.assertEqual(out['texto'], []); self.assertEqual(out['foto'], [])   # o handler do plugin cuida; nada duplicado
+        self.assertEqual(len(out['desconhecido']), 1); self.assertIn('tipo_do_futuro', out['desconhecido'][0]); self.assertIn('não invente', out['desconhecido'][0])
+        self.assertEqual(len(out['vazio']), 1); self.assertIn('rich_message', out['vazio'][0])
 
     def test_unknown_plugin_version_is_not_modified(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/new/server.ts'

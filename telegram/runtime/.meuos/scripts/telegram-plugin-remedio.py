@@ -6,6 +6,8 @@
 2. Emoji partido (provado 23/09/2026): resposta acima de 4096 é cortada por posição; se o corte cai no meio de um emoji,
    o Telegram recusa aquele pedaço inteiro (400 "strings must be encoded in UTF-8") e a resposta chega pela metade.
    O remédio recua o corte 1 posição quando ele partiria o emoji.
+3. Texto formatado (visto 06/10/2026): texto longo com lista/título chega como `rich_message`, sem `text`; nenhum handler
+   do plugin casava e a mensagem sumia calada. O remédio achata em texto simples; tipo que ninguém lê vira nota honesta.
 
 Cada remédio só entra se o trecho EXATO for reconhecido; trecho desconhecido não é tocado (✗, exige auditoria).
 Idempotente, com backup e reversão. Mac e Windows.
@@ -17,6 +19,47 @@ for stream in (sys.stdout, sys.stderr):
 
 H = os.path.expanduser("~")
 BASE = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(H, ".claude")
+# 3º remédio (09/10/2026): entra DEPOIS de todos os handlers do plugin (âncora = a declaração logo abaixo do último),
+# então só recebe a mensagem que nenhum handler leu. Texto entra pelo handleInbound normal: allowlist e pareamento valem.
+RICH_BLOCO = r'''// MESTREOS-REMEDIO-RICH: o Telegram manda texto longo formatado (listas, títulos) como `rich_message`, sem `text`;
+// nenhum handler acima casava e a mensagem sumia calada. Aqui ela vira texto simples, e tipo que ninguém lê vira nota.
+function mestreosRichTexto(rm: any): string {
+  const linhas: string[] = []
+  const anda = (b: any, pre = ''): void => {
+    if (b == null) return
+    if (Array.isArray(b)) { for (const x of b) anda(x, pre); return }
+    if (typeof b !== 'object') return
+    if (Array.isArray(b.items)) {
+      for (const it of b.items) {
+        const rot = it?.label != null ? String(it.label) + ' ' : '• '
+        const antes = linhas.length
+        anda(it?.blocks ?? it, pre + '   ')
+        if (linhas.length > antes) linhas[antes] = pre + rot + linhas[antes].trimStart()
+      }
+      return
+    }
+    if (typeof b.text === 'string' && b.text.trim()) linhas.push(pre + b.text)
+    else if (Array.isArray(b.text)) linhas.push(pre + b.text.map((t: any) => typeof t === 'string' ? t : t?.text ?? '').join(''))
+    for (const k of ['blocks', 'children', 'content']) if (b[k]) anda(b[k], pre)
+  }
+  anda(rm?.blocks ?? rm)
+  return linhas.join('\n\n').trim()
+}
+
+const MESTREOS_TIPOS_LIDOS = ['text', 'caption', 'photo', 'document', 'voice', 'audio', 'video', 'video_note', 'sticker']
+const MESTREOS_META = ['message_id', 'from', 'chat', 'date', 'reply_to_message', 'forward_origin', 'is_topic_message',
+  'message_thread_id', 'link_preview_options', 'entities', 'edit_date', 'sender_chat', 'via_bot', 'has_protected_content']
+bot.on('message', async ctx => { // MESTREOS-REMEDIO-RICH: só chega aqui o que nenhum handler acima leu
+  const m: any = ctx.message
+  if (!m || MESTREOS_TIPOS_LIDOS.some(k => m[k] != null)) return
+  const texto = m.rich_message ? mestreosRichTexto(m.rich_message) : ''
+  if (texto) { await handleInbound(ctx, texto, undefined); return }
+  const tipo = Object.keys(m).filter(k => !MESTREOS_META.includes(k)).slice(0, 4).join(', ') || 'vazia'
+  process.stderr.write(`telegram channel: mensagem de tipo desconhecido (${tipo}) virou nota\n`)
+  await handleInbound(ctx, `[nota do MestreOS: chegou uma mensagem de um tipo que este Telegram não sabe ler (${tipo}). Diga isso com honestidade, não invente o conteúdo, e peça pro dono mandar de outro jeito.]`, undefined)
+})
+
+'''
 # (nome, marca, trecho original, trecho remediado, sinal de conserto EQUIVALENTE já presente, ex.: patch do dono)
 REMEDIOS = [
     ("undefined", "// MESTREOS-REMEDIO-UNDEFINED",
@@ -28,6 +71,10 @@ REMEDIOS = [
      "    if (cut > 1 && rest.charCodeAt(cut - 1) >= 0xd800 && rest.charCodeAt(cut - 1) <= 0xdbff) cut-- // MESTREOS-REMEDIO-EMOJI\n"
      "    out.push(rest.slice(0, cut))\n",
      "rest.charCodeAt(cut - 1) >= 0xd800"),
+    ("texto formatado", "// MESTREOS-REMEDIO-RICH",
+     "type AttachmentMeta = {\n",
+     RICH_BLOCO + "type AttachmentMeta = {\n",
+     "rich_message"),
 ]
 
 def alvos():

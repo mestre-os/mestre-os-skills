@@ -275,13 +275,77 @@ def anexos(msg):
 
 AVISO_ANEXO = "[AVISO: o dono mandou um anexo (foto/áudio/arquivo) e eu não consegui baixar. Diga isso com honestidade e peça pra reenviar; não invente o conteúdo.]"
 
+# 4.0.2 (09/10/26): o Telegram passou a mandar texto longo formatado (listas, títulos) como `rich_message`, sem `text`.
+# Antes o pedido chegava VAZIO ao cérebro (e figurinha, vídeo, local etc. também). Agora o texto formatado vira texto
+# simples e qualquer tipo que a janela não lê vira uma nota honesta, nunca um turno vazio.
+LIDOS = ("text", "caption", "photo", "voice", "audio", "document")
+META = {"message_id", "from", "chat", "date", "reply_to_message", "forward_origin", "is_topic_message", "message_thread_id",
+        "link_preview_options", "entities", "edit_date", "sender_chat", "via_bot", "has_protected_content", "author_signature"}
+
+def texto_rich(rm):
+    """Achata os blocos de um rich_message (parágrafo, lista com o rótulo "1.", bloco aninhado) em texto simples."""
+    linhas = []
+    def anda(b, pre=""):
+        if b is None: return
+        if isinstance(b, list):
+            for x in b: anda(x, pre)
+            return
+        if not isinstance(b, dict): return
+        if isinstance(b.get("items"), list):
+            for it in b["items"]:
+                rot = (str(it["label"]) + " ") if isinstance(it, dict) and it.get("label") is not None else "• "
+                antes = len(linhas)
+                anda(it.get("blocks", it) if isinstance(it, dict) else it, pre + "   ")
+                if len(linhas) > antes: linhas[antes] = pre + rot + linhas[antes].lstrip()
+            return
+        t = b.get("text")
+        if isinstance(t, str) and t.strip(): linhas.append(pre + t)
+        elif isinstance(t, list): linhas.append(pre + "".join(x if isinstance(x, str) else str((x or {}).get("text", "")) for x in t))
+        for k in ("blocks", "children", "content"):
+            if b.get(k): anda(b[k], pre)
+    anda(rm.get("blocks", rm) if isinstance(rm, dict) else rm)
+    return "\n\n".join(linhas).strip()
+
+def texto_da_mensagem(msg):
+    """Texto que vai pro cérebro: text/legenda; senão o rich_message achatado; senão (tipo que a janela não lê) uma nota."""
+    texto = msg.get("text") or msg.get("caption") or ""
+    if texto or any(msg.get(k) for k in LIDOS): return texto
+    if msg.get("rich_message"):
+        texto = texto_rich(msg["rich_message"])
+        if texto: return texto
+    tipo = ", ".join([k for k in msg if k not in META][:4]) or "vazia"
+    log(f"mensagem {msg.get('message_id')}: tipo que a janela não lê ({tipo}) virou nota")
+    return (f"[nota da janela: chegou uma mensagem de um tipo que eu não sei ler ({tipo}). Diga isso com honestidade, "
+            f"não invente o conteúdo, e peça pro dono mandar de outro jeito (texto, foto, áudio ou arquivo).]")
+
+def reacao_do_dono(r):
+    """4.0.2 (12/10/26): o dono reagiu numa mensagem minha → marco 👀 nela (= "vi"), sem mandar texto nem acordar o
+    cérebro. Antes a reação nem chegava (allowed_updates só pedia "message") e ele ficava sem saber se eu tinha visto."""
+    chat = str((r.get("chat") or {}).get("id", "")); d = dono()
+    if not d or chat != d or str((r.get("user") or {}).get("id", "")) != d: return
+    antes = {x.get("emoji") for x in (r.get("old_reaction") or []) if x.get("type") == "emoji"}
+    if any(x.get("type") == "emoji" and x.get("emoji") not in antes for x in (r.get("new_reaction") or [])):
+        reagir(chat, r.get("message_id"), "👀"); log(f"reação do dono na {r.get('message_id')}: marquei 👀")
+
+RE_ARRASTO = re.compile(r"^\[o dono respondeu arrastando esta sua mensagem: «.*?»\]\n", re.S)
+
+def respondendo_a(msg):
+    """4.0.2 (12/10/26): o dono arrastou uma mensagem MINHA pra responder → o cérebro fica sabendo de qual ("esse aí", "pode")."""
+    alvo = msg.get("reply_to_message") or {}
+    if not (alvo.get("from") or {}).get("is_bot"): return ""
+    t = alvo.get("text") or alvo.get("caption") or (texto_rich(alvo["rich_message"]) if alvo.get("rich_message") else "")
+    t = re.sub(r"\s+", " ", t or "").replace("»", '"').strip()
+    return f"[o dono respondeu arrastando esta sua mensagem: «{t[:300] or 'mensagem sem texto'}»]\n"
+
 def receber(update):
+    if update.get("message_reaction"): reacao_do_dono(update["message_reaction"]); return
     msg = update.get("message") or update.get("edited_message")
     if not msg: return
     chat = str(msg.get("chat", {}).get("id", "")); mid = msg.get("message_id"); texto = msg.get("text") or msg.get("caption") or ""
     d = dono()
     if not d: parear(chat, texto); return
     if chat != d: log(f"ignorado chat {chat}"); return
+    texto = respondendo_a(msg) + texto_da_mensagem(msg)
     reagir(chat, mid, "✍" if (msg.get("voice") or msg.get("audio")) else "👀")  # 👂 não existe pra bot no Telegram (REACTION_INVALID)
     imgs, auds, docs = anexos(msg)
     if (msg.get("photo") or msg.get("voice") or msg.get("audio") or msg.get("document")) and not (imgs or auds or docs):
@@ -305,7 +369,8 @@ ESPERANDO = threading.Event()  # ligado = esperando anexo prometido: o "digitand
 ABSORVIDOS = []
 
 def promessa(p):
-    m = RE_PROMESSA.search((p.get("texto") or "") + " " + " ".join(t for t in (p.get("transcricoes") or []) if t))
+    texto = RE_ARRASTO.sub("", p.get("texto") or "")  # o que EU escrevi (citado ao arrastar) não é promessa dele
+    m = RE_PROMESSA.search(texto + " " +" ".join(t for t in (p.get("transcricoes") or []) if t))
     return m.group(2).lower() if m else None
 
 def tem_anexo(p):
@@ -436,7 +501,7 @@ def janela():
             offset = ler_offset(); erros409 = 0
             try:
                 while True:
-                    r = api("getUpdates", {"offset": offset, "timeout": POLL, "allowed_updates": json.dumps(["message"])}, max_time=POLL + 15)
+                    r = api("getUpdates", {"offset": offset, "timeout": POLL, "allowed_updates": json.dumps(["message", "message_reaction"])}, max_time=POLL + 15)
                     if not r.get("ok"):
                         if r.get("error_code") == 409 or "409" in str(r.get("description", "")) or "Conflict" in str(r.get("description", "")):
                             erros409 += 1
@@ -598,6 +663,50 @@ def teste():
         reacoes(13)[-1:] == ["👌"] and reacoes(210)[-1:] == ["👌"] and reacoes(211)[-1:] == ["👌"] and "👌" not in reacoes(20))
     chk("25 queda no meio de um pacote: UM aviso só (com '2 mensagens') e os dois pedidos ficam incertos, sem repetir",
         len(avisos) == 1 and "2 mensagens" in avisos[0] and q.status("555:260") == "uncertain" and q.status("555:261") == "uncertain")
+    # ---- 4.0.2 (09/10/26): texto longo formatado (rich_message) e tipo que a janela não lê nunca viram turno vazio ----
+    def texto_na_fila(mid):
+        with q.connect() as db: r = db.execute("SELECT payload FROM jobs WHERE id=?", (f"555:{mid}",)).fetchone()
+        return json.loads(r[0])["texto"] if r else None
+    rich = {"blocks": [{"type": "paragraph", "text": "Oi, segue o plano:"},
+                       {"type": "list", "items": [{"label": "1.", "blocks": [{"type": "paragraph", "text": "Primeiro eu mando."}]},
+                                                  {"label": "2.", "blocks": [{"type": "paragraph", "text": "Depois a empresa publica."}]}]},
+                       {"type": "paragraph", "text": "Um abraço"}]}
+    receber({"update_id": 30, "message": {"message_id": 300, "chat": {"id": 555}, "rich_message": rich}})
+    t = texto_na_fila(300) or ""
+    chk("27 rich_message (texto longo formatado) vira texto na fila, com a lista numerada (antes: turno vazio)",
+        t.startswith("Oi, segue o plano:") and "1. Primeiro eu mando." in t and "2. Depois a empresa publica." in t and t.endswith("Um abraço"))
+    receber({"update_id": 31, "message": {"message_id": 301, "chat": {"id": 555}, "text": "oi de novo", "entities": []}})
+    chk("28 texto comum continua igual (o achatador não mexe)", texto_na_fila(301) == "oi de novo")
+    receber({"update_id": 32, "message": {"message_id": 302, "chat": {"id": 555}, "sticker": {"file_id": "s1", "emoji": "😀"}}})
+    t = texto_na_fila(302) or ""
+    chk("29 tipo que a janela não lê (figurinha) vira nota honesta com o nome do tipo, nunca vazio", "nota da janela" in t and "sticker" in t and "não invente" in t)
+    receber({"update_id": 33, "message": {"message_id": 303, "chat": {"id": 555}, "rich_message": {"blocks": []}}})
+    t = texto_na_fila(303) or ""
+    chk("30 rich_message vazio ou de formato desconhecido vira nota (nunca some calado)", "nota da janela" in t and "rich_message" in t)
+    receber({"update_id": 34, "message": {"message_id": 304, "chat": {"id": 666}, "rich_message": rich}})
+    chk("31 rich_message de estranho continua ignorado (sem fila, sem resposta)", texto_na_fila(304) is None and q.status("666:304") is None)
+    # ---- 4.0.2 (12/10/26): reação do dono vira 👀 (visto) e arrastar pra responder diz a qual mensagem ----
+    reag = lambda mid, novo, velho=(), quem=555, chat=555: receber({"update_id": 40, "message_reaction": {"chat": {"id": chat}, "message_id": mid,
+        "user": {"id": quem}, "old_reaction": [{"type": "emoji", "emoji": e} for e in velho], "new_reaction": [{"type": "emoji", "emoji": e} for e in novo]}})
+    reag(400, ["👍"])
+    chk("32 dono reage numa mensagem minha: marco 👀 nela, sem fila e sem resposta", reacoes(400) == ["👀"] and q.status("555:400") is None)
+    reag(401, [], ["👍"]); reag(402, ["👍"], quem=777); reag(403, ["👍"], quem=666, chat=666)
+    chk("33 tirar reação, outra pessoa ou outro chat reagindo: nada acontece", reacoes(401) == [] and reacoes(402) == [] and reacoes(403) == [])
+    receber({"update_id": 41, "message": {"message_id": 410, "chat": {"id": 555}, "text": "pode sim",
+             "reply_to_message": {"message_id": 99, "from": {"is_bot": True}, "text": "Quer que eu  agende\na reunião?"}}})
+    t = texto_na_fila(410) or ""
+    chk("34 arrastou minha mensagem: o cérebro recebe de qual mensagem e o texto dele", "arrastando esta sua mensagem: «Quer que eu agende a reunião?»" in t and t.endswith("pode sim"))
+    receber({"update_id": 42, "message": {"message_id": 420, "chat": {"id": 555}, "text": "ok",
+             "reply_to_message": {"message_id": 98, "from": {"is_bot": False}, "text": "msg encaminhada de alguém"}}})
+    p_arr = {"texto": respondendo_a({"reply_to_message": {"from": {"is_bot": True}, "text": "vou te mandar a foto amanhã"}}) + "beleza"}
+    chk("35 resposta a mensagem que não é minha não ganha marca; promessa citada da MINHA mensagem não vira espera de anexo",
+        texto_na_fila(420) == "ok" and promessa(p_arr) is None)
+    uso = {"claude-opus-5-5": {"costUSD": 0.42, "outputTokens": 900}, "claude-haiku-5-5": {"costUSD": 0.003, "outputTokens": 40}}
+    empate = {"claude-sonnet-5-5": {"costUSD": 0, "outputTokens": 700}, "claude-haiku-5-5": {"costUSD": 0, "outputTokens": 30}}
+    chk("36 assinatura: quem respondeu é o modelo que mais gastou, não o Haiku interno que vem por último (empate: mais texto)",
+        cerebro.modelo_que_respondeu(uso) == "claude-opus-5-5" and cerebro.modelo_que_respondeu(empate) == "claude-sonnet-5-5"
+        and cerebro.modelo_que_respondeu({"claude-opus-5-5": None}) == "claude-opus-5-5")
+    q.drain(executar, recuperado)
     print(f"----- {ok} ok · {fail} falhas"); return 0 if fail == 0 else 1
 
 if __name__ == "__main__":
