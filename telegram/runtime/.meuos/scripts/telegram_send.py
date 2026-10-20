@@ -30,6 +30,11 @@ def _token_keychain():
     except Exception:
         return ""
 
+def _env_ps51():
+    # 4.0.5: dentro do PowerShell 7 o PSModulePath vem com os módulos do 7 na frente; o powershell.exe 5.1 aberto
+    # por este script herda e não carrega o ConvertTo-SecureString (o Cofre "não abre"). Sem a variável, o 5.1 usa a dele.
+    return {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+
 def _token_dpapi():
     f = os.path.join(os.environ.get("LOCALAPPDATA", ""), "MestreOS", "cofre", "telegram-bot-token.cred")
     if not os.path.isfile(f): return ""
@@ -39,7 +44,7 @@ def _token_dpapi():
           "[Runtime.InteropServices.Marshal]::PtrToStringAuto($b)")
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps],
-                           capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
+                           capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace", env=_env_ps51())
         if r.returncode != 0 or not _limpo(r.stdout):
             print("telegram_send: o Cofre DPAPI existe mas não abriu (é de outro usuário do Windows? regrave pelo Cofre).", file=sys.stderr)
             return ""

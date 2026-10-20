@@ -42,6 +42,11 @@ def diga(m):
     print(time.strftime("%H:%M ") + m, flush=True)
 
 # ---------- segredos (mesmo Cofre dos robôs; nada impresso) ----------
+def _env_ps51():
+    # 4.0.5: dentro do PowerShell 7 o PSModulePath vem com os módulos do 7 na frente; o powershell.exe 5.1 aberto
+    # por aqui herda e não carrega o ConvertTo-SecureString (o Cofre "não abre"). Sem a variável, o 5.1 usa a dele.
+    return {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+
 def segredo(nome, var):
     v = (os.environ.get(var) or "").strip()
     if v: return v
@@ -56,7 +61,7 @@ def segredo(nome, var):
             ps = ("$e = (Get-Content -Raw -LiteralPath '" + f.replace("'", "''") + "').Trim(); $s = ConvertTo-SecureString $e; "
                   "$b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s); [Runtime.InteropServices.Marshal]::PtrToStringAuto($b)")
             try:
-                r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
+                r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace", env=_env_ps51())
                 if r.returncode == 0 and r.stdout.strip(): return r.stdout.strip()
             except Exception: pass
     try:

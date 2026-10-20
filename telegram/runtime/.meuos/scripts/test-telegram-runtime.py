@@ -541,4 +541,59 @@ class PluginRemedioTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0); self.assertEqual(server.read_bytes(), original)
 
 
+class DpapiPowershellTests(unittest.TestCase):
+    """4.0.5: o powershell.exe 5.1 que lê o Cofre no Windows não herda o PSModulePath do PowerShell 7.
+    Provado na VM (PowerShell 7.6.7): herdando, o ConvertTo-SecureString não carrega e o Cofre "não abre"."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        cofre = Path(self.tmp.name) / 'MestreOS' / 'cofre'; cofre.mkdir(parents=True)
+        for nome in ('telegram-bot-token', 'groq-api-key'):
+            (cofre / f'{nome}.cred').write_text('blob-de-teste', encoding='utf-8')
+        self.chamadas = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def falso(self, rc=0, saida='valor-de-teste'):
+        def run(cmd, **kw):
+            self.chamadas.append((cmd, kw))
+            return subprocess.CompletedProcess(cmd, rc, stdout=saida, stderr='')
+        return run
+
+    def ambiente(self, chave='PSModulePath'):
+        return {'LOCALAPPDATA': self.tmp.name, 'PATH': os.defpath,
+                chave: r'C:\Program Files\PowerShell\7\Modules;C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules'}
+
+    def confere_env(self, chave):
+        cmd, kw = self.chamadas[-1]
+        self.assertEqual(cmd[0], 'powershell')
+        env = kw.get('env')
+        self.assertIsNotNone(env, 'sem env próprio o powershell 5.1 herda o PSModulePath do PowerShell 7')
+        self.assertEqual([k for k in env if k.upper() == 'PSMODULEPATH'], [])
+        self.assertEqual(env.get('LOCALAPPDATA'), self.tmp.name)   # o resto do ambiente segue igual
+        self.assertIn(chave, os.environ)                              # e o ambiente do processo não muda
+
+    def test_send_dpapi_sem_psmodulepath(self):
+        import telegram_send
+        for chave in ('PSModulePath', 'PSMODULEPATH'):
+            with patch.dict(os.environ, self.ambiente(chave), clear=True), patch.object(telegram_send.subprocess, 'run', self.falso()):
+                self.assertEqual(telegram_send._token_dpapi(), 'valor-de-teste')
+                self.confere_env(chave)
+
+    def test_send_dpapi_que_falha_ainda_avisa(self):
+        import contextlib, io
+        import telegram_send
+        err = io.StringIO()
+        with patch.dict(os.environ, self.ambiente(), clear=True), \
+             patch.object(telegram_send.subprocess, 'run', self.falso(rc=1, saida='')), contextlib.redirect_stderr(err):
+            self.assertEqual(telegram_send._token_dpapi(), '')
+        self.assertIn('não abriu', err.getvalue())
+
+    def test_janela_segredo_windows_sem_psmodulepath(self):
+        with patch.dict(os.environ, self.ambiente(), clear=True), patch.object(janela, 'SISTEMA', 'Windows'), \
+             patch.object(janela, 'PLUGIN_DIR', self.tmp.name), patch.object(janela.subprocess, 'run', self.falso()):
+            self.assertEqual(janela.segredo('groq-api-key', 'GROQ_API_KEY'), 'valor-de-teste')
+            self.confere_env('PSModulePath')
+
+
 if __name__ == '__main__': unittest.main()
