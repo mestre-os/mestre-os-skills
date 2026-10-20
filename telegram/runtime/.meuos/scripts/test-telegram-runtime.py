@@ -20,6 +20,27 @@ import cerebro
 import telegram_janela as janela
 
 
+def _remedio():
+    spec = importlib.util.spec_from_file_location('telegram_plugin_remedio', SCRIPTS / 'telegram-plugin-remedio.py')
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+
+
+def _ancoras():
+    """Arquivo mínimo com cada trecho que os remédios reconhecem, 1 vez cada (a ordem real vem no teste do plugin 0.0.7)."""
+    vistos = []
+    for _nome, _marca, edits, _equiv in _remedio().REMEDIOS:
+        for old, _new in edits:
+            if old not in vistos: vistos.append(old)
+    return ''.join(vistos)
+
+
+def _bun(root, codigo, **env):
+    f = Path(root) / 'harness.ts'; f.write_text(codigo, encoding='utf-8')
+    return subprocess.run(['bun', str(f)], capture_output=True, encoding='utf-8', timeout=60,
+                          env=dict(os.environ, MESTREOS_TELEGRAM_BATIDA_MS='50', **env))
+
+
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -113,7 +134,7 @@ class CerebroTests(unittest.TestCase):
         with patch.object(cerebro, '_run_stdin', side_effect=fake_run):
             acoes = cerebro.responder(self.msg('oi', imagens=[str(self.root / 'f.jpg')]))
         self.assertEqual(acoes[0][0], 'texto'); self.assertIn('pronto', acoes[0][1]); self.assertIn('🟣 Claude · Opus 5', acoes[0][1])
-        self.assertIn('--session-id', seen['cmd']); self.assertNotIn('oi', ' '.join(seen['cmd']))  # prompt vai pelo stdin, nunca pelo argv
+        self.assertIn('--session-id', seen['cmd']); self.assertNotIn('oi', seen['cmd'])  # prompt vai pelo stdin, nunca pelo argv (item, não texto: a pasta temporária sorteada podia conter "oi")
         self.assertIn('<channel source="mestreos-telegram"', seen['prompt']); self.assertIn('f.jpg', seen['prompt'])
         st = cerebro.load(); self.assertEqual(st['claude']['sessao'], 'sess-1'); self.assertEqual(st['claude']['modelo'], 'claude-opus-5')
         with patch.object(cerebro, '_run_stdin', side_effect=fake_run):
@@ -412,8 +433,8 @@ class PluginRemedioTests(unittest.TestCase):
     def test_plugin_patch_idempotent_and_revert_preserves_new_code(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
         server.parent.mkdir(parents=True)
-        original = '        const text = args.text as string\n' + '  while (rest.length > limit) {\n    out.push(rest.slice(0, cut))\n  }\n' + 'type AttachmentMeta = {\n'
-        server.write_text(original, encoding='utf-8')
+        original = _ancoras()
+        server.write_bytes(original.encode('utf-8'))
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
         def run(*args):
@@ -421,14 +442,27 @@ class PluginRemedioTests(unittest.TestCase):
         self.assertEqual(run().returncode, 0)
         first = server.read_bytes(); self.assertEqual(run().returncode, 0)
         self.assertEqual(server.read_bytes(), first); self.assertEqual(run('--check').returncode, 0)
-        with server.open('a', encoding='utf-8') as f: f.write('// unrelated upstream fix\n')
+        with server.open('ab') as f: f.write(b'// unrelated upstream fix\n')   # binário: o modo texto do Windows viraria CRLF
         self.assertEqual(run('--revert').returncode, 0)
-        self.assertEqual(server.read_text(), original + '// unrelated upstream fix\n')
+        self.assertEqual(server.read_bytes(), (original + '// unrelated upstream fix\n').encode('utf-8'))
+
+    def test_stray_crlf_line_does_not_flip_the_whole_file(self):
+        # prova no Windows (20/10/26): uma linha CRLF solta num arquivo LF fazia o remédio ler tudo como CRLF; a reversão
+        # não achava os trechos e o remédio ficava preso
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
+        server.parent.mkdir(parents=True); original = _ancoras().encode('utf-8'); server.write_bytes(original)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(SCRIPTS / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        with server.open('ab') as f: f.write(b'// linha de um editor do Windows\r\n')
+        r = subprocess.run(cmd + ['--revert'], env=env, capture_output=True, encoding='utf-8')
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(server.read_bytes(), original + b'// linha de um editor do Windows\r\n')
 
     def test_both_remedies_applied_and_check_needs_both(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
         server.parent.mkdir(parents=True)
-        server.write_bytes(b'        const text = args.text as string\n    out.push(rest.slice(0, cut))\ntype AttachmentMeta = {\n')  # LF explícito (write_text vira CRLF no Windows)
+        server.write_bytes(_ancoras().encode('utf-8'))  # LF explícito (write_text vira CRLF no Windows)
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
         self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
@@ -436,18 +470,201 @@ class PluginRemedioTests(unittest.TestCase):
         self.assertIn('MESTREOS-REMEDIO-UNDEFINED', s); self.assertIn('MESTREOS-REMEDIO-EMOJI', s)
         self.assertIn('rest.charCodeAt(cut - 1) >= 0xd800', s)
         self.assertIn('MESTREOS-REMEDIO-RICH', s)  # 3º remédio (09/10/26): texto formatado
+        for marca in ('CONVERSA', 'DIGITANDO', 'ASSINATURA'):  # 4º a 6º (20/10/26): relatório da aluna
+            self.assertIn('MESTREOS-REMEDIO-' + marca, s)
         self.assertNotIn(b'\r\n', server.read_bytes())  # arquivo LF continua LF (o de CRLF tem teste próprio)
+        self.assertEqual(subprocess.run(cmd + ['--check'], env=env, capture_output=True).returncode, 0)
+
+    def test_new_remedy_is_all_or_nothing(self):
+        # 20/10/26: remédio de vários trechos entra inteiro ou não entra; pela metade (chamada sem a função) quebraria o plugin
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/metade/server.ts'
+        server.parent.mkdir(parents=True)
+        server.write_bytes(_ancoras().replace("      await bot.start({\n        onStart: info => {\n", '').encode('utf-8'))
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        r = subprocess.run([sys.executable, str(SCRIPTS / 'telegram-plugin-remedio.py')], env=env, capture_output=True, encoding='utf-8')
+        self.assertNotEqual(r.returncode, 0)
+        s = server.read_text(encoding='utf-8')
+        self.assertNotIn('MESTREOS-REMEDIO-CONVERSA', s); self.assertNotIn('mestreosArrastada', s)  # nada da conversa entrou
+        self.assertIn('MESTREOS-REMEDIO-DIGITANDO', s); self.assertIn('MESTREOS-REMEDIO-ASSINATURA', s)  # os outros entraram
+        self.assertNotEqual(subprocess.run([sys.executable, str(SCRIPTS / 'telegram-plugin-remedio.py'), '--check'], env=env, capture_output=True).returncode, 0)
+
+    # sha256 do server.ts 0.0.7 original (LF), o que estes remédios conhecem. Plugin novo na máquina do aluno não pode
+    # deixar a suíte vermelha (o 7D.3 exige verde): ali vale o --check, que recusa trecho desconhecido sem mexer.
+    REAL_007 = 'd902d7195a527b579b889cfdbf251fc24fd224a68e319ac6b7c3b691515c3458'
+
+    def _plugin_real(self):
+        # a cópia da loja de plugins (marketplaces) fica sempre original; a do cache pode ter remédio ou patch do dono
+        pedido = os.environ.get('MESTREOS_TELEGRAM_SERVER_TS', '')
+        for c in (pedido, str(Path.home() / '.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts')):
+            p = Path(c) if c else None
+            if p and p.is_file():
+                b = p.read_bytes(); t = b.decode('utf-8', errors='ignore')
+                if 'MESTREOS-REMEDIO' in t or 'function startTyping(' in t or 'const bot = new Bot(TOKEN)' not in t: continue
+                if c == pedido or __import__('hashlib').sha256(b.replace(b'\r\n', b'\n')).hexdigest() == self.REAL_007: return p
+        return None
+
+    def test_revert_is_all_or_nothing_too(self):
+        # interrogar 405b: a volta desfazia meio remédio (sobrava a chamada sem a função) e ainda dizia que deu certo
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
+        server.parent.mkdir(parents=True); server.write_bytes(_ancoras().encode('utf-8'))
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(SCRIPTS / 'telegram-plugin-remedio.py')]
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
+        s = server.read_text(encoding='utf-8')
+        mexido = s.replace("        mestreosEscolheu(args.chat_id as string, Number(args.message_id)) // MESTREOS-REMEDIO-CONVERSA: a escolha do agente vale\n", '')
+        self.assertNotEqual(mexido, s); server.write_bytes(mexido.encode('utf-8'))
+        r = subprocess.run(cmd + ['--revert'], env=env, capture_output=True, encoding='utf-8')
+        self.assertNotEqual(r.returncode, 0); self.assertIn('✗', r.stdout)
+        depois = server.read_text(encoding='utf-8')
+        self.assertIn('function mestreosEscolheu(', depois); self.assertIn("bot.on('message_reaction'", depois)  # a conversa ficou inteira
+        self.assertNotIn('MESTREOS-REMEDIO-DIGITANDO', depois); self.assertNotIn('MESTREOS-REMEDIO-ASSINATURA', depois)  # os outros voltaram
+
+    def test_access_rule_comes_before_any_side_effect(self):
+        # interrogar 405b (os dois revisores): localização gravava e consultava o mapa antes da régua de acesso do plugin
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/fixture/server.ts'
+        server.parent.mkdir(parents=True); server.write_bytes(_ancoras().encode('utf-8'))
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        self.assertEqual(subprocess.run([sys.executable, str(SCRIPTS / 'telegram-plugin-remedio.py')], env=env, capture_output=True).returncode, 0)
+        s = server.read_text(encoding='utf-8')
+        def antes(guarda, efeito, de):
+            i = s.index(de); self.assertLess(s.index(guarda, i), s.index(efeito, i), (guarda, efeito))
+        antes('mestreosDoDono(m.chat, m.from)', 'await mestreosLocal(m)', "bot.on('message', async (ctx, next)")
+        antes('mestreosDoDono(m.chat, m.from)', 'mestreosLocalSalva(m.location, true)', "bot.on('edited_message'")
+        antes('mestreosDoDono(r.chat, user)', 'setMessageReaction', "bot.on('message_reaction'")
+        regua = s[s.index('function mestreosDoDono('):s.index('function mestreosArrastada(')]
+        for parte in ("chat?.type === 'private'", "a.dmPolicy !== 'disabled'", 'a.allowFrom.includes(String(from.id))'):
+            self.assertIn(parte, regua)  # a mesma régua do gate() pro privado
+        self.assertIn('chunk(mestreosAssina(text, parseMode), limit, mode)', s)
+        self.assertIn('agora - pulso > MESTREOS_MUDO_MS', s)
+
+    def test_unknown_upstream_is_never_taken_as_the_real_plugin(self):
+        # rodada 2 (os dois revisores): o filtro por hash existia, mas nenhum teste provava que um plugin novo fica de
+        # fora (o aluno com plugin novo não pode ver a suíte vermelha; ali vale o --check)
+        casa = self.root / 'casa'
+        alvo = casa / '.claude/plugins/marketplaces/claude-plugins-official/external_plugins/telegram/server.ts'
+        alvo.parent.mkdir(parents=True); alvo.write_text('const bot = new Bot(TOKEN)\n// 0.0.8 de mentira\n', encoding='utf-8')
+        with patch.dict(os.environ, {'HOME': str(casa), 'USERPROFILE': str(casa), 'MESTREOS_TELEGRAM_SERVER_TS': ''}):
+            self.assertIsNone(self._plugin_real())
+        with patch.dict(os.environ, {'HOME': str(casa), 'USERPROFILE': str(casa), 'MESTREOS_TELEGRAM_SERVER_TS': str(alvo)}):
+            self.assertEqual(self._plugin_real(), alvo)   # pedido explícito de quem desenvolve vale
+
+    def test_real_plugin_takes_all_six_and_reverts_identical(self):
+        # o teste das âncoras mínimas não pega trecho que mudou no plugin de verdade: este usa o 0.0.7 original, se houver
+        real = self._plugin_real()
+        if not real: self.skipTest('sem cópia original do plugin 0.0.7 nesta máquina')
+        server = self.root / 'plugins/cache/claude-plugins-official/telegram/0.0.7/server.ts'
+        server.parent.mkdir(parents=True); original = real.read_bytes(); server.write_bytes(original)
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
+        cmd = [sys.executable, str(SCRIPTS / 'telegram-plugin-remedio.py')]
+        r = subprocess.run(cmd, env=env, capture_output=True, encoding='utf-8')
+        self.assertEqual(r.returncode, 0, r.stdout); self.assertEqual(r.stdout.count('remédio aplicado'), 6, r.stdout)
+        s = server.read_text(encoding='utf-8')
+        self.assertLess(s.index("bot.on('message', async (ctx, next)"), s.index('// MESTREOS-REMEDIO-RICH:'))  # localização antes do genérico
+        self.assertLess(s.index('const mestreosPendentes'), s.index('await mcp.connect('))  # Map pronto antes de a 1ª ferramenta chegar
+        primeira = server.read_bytes()
+        self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0); self.assertEqual(server.read_bytes(), primeira)
+        self.assertEqual(subprocess.run(cmd + ['--revert'], env=env, capture_output=True).returncode, 0)
+        self.assertEqual(server.read_bytes(), original)
+
+    @unittest.skipUnless(__import__('shutil').which('bun'), 'sem bun nesta máquina (o plugin do Claude roda em bun; teste de comportamento pulado)')
+    def test_signature_block_behavior_in_bun(self):
+        state = self.root / 'state'; state.mkdir()
+        r = _bun(self.root, "import { readFileSync, writeFileSync } from 'fs'\nimport { join } from 'path'\n"
+                 f"const STATE_DIR = {json.dumps(str(state))}\n" + _remedio().ASSINATURA_BLOCO +
+                 "const out: any = { sem: mestreosAssina('oi') }\n"
+                 "writeFileSync(join(STATE_DIR, 'assinatura'), '🟣 Claude · Opus 5.5 · alto\\n')\n"
+                 "out.com = mestreosAssina('oi'); out.limpo = mestreosAssina('  [[limpo]]  Texto pra outra pessoa')\n"
+                 "out.md = mestreosAssina('*oi*', 'MarkdownV2')\n"
+                 "out.vazio = mestreosAssina(''); console.log(JSON.stringify(out))\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(out['sem'], 'oi'); self.assertEqual(out['com'], 'oi\n\n🟣 Claude · Opus 5.5 · alto')
+        self.assertEqual(out['md'], '*oi*\n\n🟣 Claude · Opus 5\\.5 · alto')  # o ponto é reservado no MarkdownV2
+        self.assertEqual(out['limpo'], 'Texto pra outra pessoa'); self.assertEqual(out['vazio'], '')
+
+    @unittest.skipUnless(__import__('shutil').which('bun'), 'sem bun nesta máquina (o plugin do Claude roda em bun; teste de comportamento pulado)')
+    def test_typing_heartbeat_lasts_until_turn_end_in_bun(self):
+        # 20/10/26: o "digitando" bate até o FIM DO TURNO (gancho Stop), não até a 1ª resposta
+        state = self.root / 'state'; state.mkdir()
+        r = _bun(self.root, "import { readFileSync, statSync, writeFileSync } from 'fs'\nimport { join } from 'path'\n"
+                 f"const STATE_DIR = {json.dumps(str(state))}\nlet batidas = 0\n"
+                 "const bot = { api: { sendChatAction: async () => { batidas++ } } }\n" + _remedio().DIGITANDO_BLOCO +
+                 "const espera = (ms: number) => new Promise(r => setTimeout(r, ms))\nconst out: any = { ganchos: mestreosComGanchos() }\n"
+                 "mestreosDigitando('1'); await espera(400); out.sozinho = batidas\n"
+                 "writeFileSync(join(STATE_DIR, 'turn-start'), String(Date.now())); await espera(300); out.aberto = batidas\n"
+                 "writeFileSync(join(STATE_DIR, 'turn-end'), String(Date.now() + 5)); await espera(200); out.fim = batidas\n"
+                 "await espera(300); out.depois = batidas; out.timers = mestreosBatidas.size\nconsole.log(JSON.stringify(out))\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertFalse(out['ganchos'])
+        self.assertGreaterEqual(out['sozinho'], 4)              # bate sozinho, sem esperar a 1ª resposta
+        self.assertGreaterEqual(out['aberto'] - out['sozinho'], 3)  # turno aberto: continua
+        self.assertEqual(out['depois'], out['fim']); self.assertEqual(out['timers'], 0)  # fim do turno: apaga e solta o timer
+
+    @unittest.skipUnless(__import__('shutil').which('bun'), 'sem bun nesta máquina (o plugin do Claude roda em bun; teste de comportamento pulado)')
+    def test_typing_stops_when_an_open_turn_goes_silent_in_bun(self):
+        # interrogar 405b: Esc na janela não tem gancho; turno aberto sem sinal de vida não pode bater 3 h
+        state = self.root / 'state'; state.mkdir()
+        r = _bun(self.root, "import { readFileSync, statSync, writeFileSync } from 'fs'\nimport { join } from 'path'\n"
+                 f"const STATE_DIR = {json.dumps(str(state))}\nlet batidas = 0\n"
+                 "const bot = { api: { sendChatAction: async () => { batidas++ } } }\n" + _remedio().DIGITANDO_BLOCO +
+                 "const espera = (ms: number) => new Promise(r => setTimeout(r, ms))\nconst out: any = {}\n"
+                 "writeFileSync(join(STATE_DIR, 'turn-end'), String(Date.now() - 9000))\n"
+                 "writeFileSync(join(STATE_DIR, 'turn-start'), String(Date.now()))\n"
+                 "mestreosDigitando('1'); await espera(150); out.vivo = mestreosBatidas.size\n"
+                 "writeFileSync(join(STATE_DIR, 'tool-activity'), String(Date.now())); await espera(250); out.pulso = mestreosBatidas.size\n"
+                 "await espera(450); out.mudo = mestreosBatidas.size\nconsole.log(JSON.stringify(out))\n",
+                 MESTREOS_TELEGRAM_MUDO_MS='300')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual((out['vivo'], out['pulso'], out['mudo']), (1, 1, 0))  # ferramenta segura aceso; silêncio apaga
+
+    @unittest.skipUnless(__import__('shutil').which('bun'), 'sem bun nesta máquina (o plugin do Claude roda em bun; teste de comportamento pulado)')
+    def test_conversa_block_behavior_in_bun(self):
+        # resposta arrastada, localização e a troca da reação de chegada, iguais à janela da Dupla (7D)
+        state = self.root / 'state'; state.mkdir()
+        r = _bun(self.root, "import { readFileSync, writeFileSync, renameSync } from 'fs'\nimport { join } from 'path'\n"
+                 f"const STATE_DIR = {json.dumps(str(state))}\ntype Context = any\ntype ReactionTypeEmoji = any\n"
+                 "const reacoes: any[] = []\nconst bot = { api: { setMessageReaction: async (c: string, m: number, r: any) => { reacoes.push([m, r[0].emoji]) } } }\n"
+                 "globalThis.fetch = (async () => new Response(JSON.stringify({ display_name: 'Rua da Bahia, 1000' }))) as any\n"
+                 "function loadAccess(): any { return acesso }\n"
+                 + _remedio().CONVERSA_BLOCO +
+                 "const bot_ = { from: { is_bot: true } }\nconst out: any = {}\n"
+                 "out.arrastada = mestreosArrastada({ message: { reply_to_message: { ...bot_, text: 'Proposta  A\\n ou B?' } } })\n"
+                 "out.propria = mestreosArrastada({ message: { reply_to_message: { from: { is_bot: false }, text: 'minha' } } })\n"
+                 "out.nenhuma = mestreosArrastada({ message: {} })\n"
+                 "out.local = await mestreosLocal({ location: { latitude: -19.93, longitude: -43.94, horizontal_accuracy: 12 } })\n"
+                 "out.lugar = await mestreosLocal({ venue: { location: { latitude: 1, longitude: 2 }, title: 'Padaria', address: 'Rua X' } })\n"
+                 "out.vivo = await mestreosLocal({ location: { latitude: 3, longitude: 4, live_period: 600 } })\n"
+                 "out.salvo = JSON.parse(readFileSync(join(STATE_DIR, 'ultima-localizacao.json'), 'utf8'))\n"
+                 "mestreosPendente('1', 11); mestreosPendente('1', 12); mestreosEscolheu('1', 12); mestreosFinaliza('1'); mestreosFinaliza('1')\n"
+                 "let acesso: any = { dmPolicy: 'allowlist', allowFrom: ['42'] }\n"
+                 "const regua = () => [mestreosDoDono({ type: 'private' }, { id: 42 }), mestreosDoDono({ type: 'group' }, { id: 42 }),\n"
+                 "  mestreosDoDono({ type: 'private' }, { id: 7 }), mestreosDoDono({ type: 'private' }, undefined)]\n"
+                 "out.regua = regua(); acesso = { dmPolicy: 'disabled', allowFrom: ['42'] }; out.desligado = regua()\n"
+                 "await new Promise(r => setTimeout(r, 50)); out.reacoes = reacoes\nconsole.log(JSON.stringify(out))\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(out['arrastada'], '[o dono respondeu arrastando esta sua mensagem: «Proposta A ou B?»]\n')
+        self.assertEqual(out['propria'], ''); self.assertEqual(out['nenhuma'], '')  # só mensagem do agente, igual ao 7D
+        self.assertEqual(out['local'], '[localização enviada pelo dono: Rua da Bahia, 1000 · -19.930000, -43.940000 (precisão ~12 m) · https://maps.google.com/?q=-19.93,-43.94.]')
+        self.assertTrue(out['lugar'].startswith('[localização enviada pelo dono: Padaria · Rua X · 1.000000, 2.000000'))
+        self.assertIn('AO VIVO por 10 min', out['vivo']); self.assertEqual(out['salvo']['ao_vivo'], True)
+        self.assertEqual(out['reacoes'], [[11, '👌']])  # a escolhida (12) fica; 👌 só uma vez
+        self.assertEqual(out['regua'], [True, False, False, False])  # só o dono, só no privado
+        self.assertEqual(out['desligado'], [False, False, False, False])  # canal desligado: ninguém
 
     def test_crlf_file_keeps_crlf_and_revert_is_byte_identical(self):
         server = self.root / 'plugins/cache/claude-plugins-official/telegram/win/server.ts'
         server.parent.mkdir(parents=True)
-        original = b'// cabecalho\r\n        const text = args.text as string\r\n    out.push(rest.slice(0, cut))\r\ntype AttachmentMeta = {\r\n// fim\r\n'
+        original = b'// cabecalho\r\n' + _ancoras().replace('\n', '\r\n').encode('utf-8') + b'// fim\r\n'
         server.write_bytes(original)
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
         cmd = [sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')]
         self.assertEqual(subprocess.run(cmd, env=env, capture_output=True).returncode, 0)
         b = server.read_bytes()
         self.assertIn(b'MESTREOS-REMEDIO-EMOJI', b); self.assertIn(b'MESTREOS-REMEDIO-UNDEFINED', b); self.assertIn(b'MESTREOS-REMEDIO-RICH', b)
+        for marca in (b'CONVERSA', b'DIGITANDO', b'ASSINATURA'): self.assertIn(b'MESTREOS-REMEDIO-' + marca, b)
         self.assertEqual(b.count(b'\n'), b.count(b'\r\n'))  # nenhuma linha virou LF
         self.assertTrue(b.startswith(b'// cabecalho\r\n') and b.endswith(b'// fim\r\n'))
         self.assertEqual(subprocess.run(cmd + ['--revert'], env=env, capture_output=True).returncode, 0)
@@ -460,6 +677,9 @@ class PluginRemedioTests(unittest.TestCase):
                 '    if (cut > 1 && rest.charCodeAt(cut - 1) >= 0xd800 && rest.charCodeAt(cut - 1) <= 0xdbff) cut-- // PATCH DO DONO\n'
                 '    out.push(rest.slice(0, cut))\n'
                 "bot.on('message', async ctx => { if ((ctx.message as any).rich_message) {} }) // PATCH DO DONO\n"
+                "bot.on('message_reaction', async ctx => {}) // PATCH DO DONO\n"
+                'function startTyping(chat_id: string): void {} // PATCH DO DONO\n'
+                "const s = readFileSync(join(STATE_DIR, 'assinatura'), 'utf8') // PATCH DO DONO\n"
                 'type AttachmentMeta = {\n')
         server.write_text(dono, encoding='utf-8')
         env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root))
@@ -539,6 +759,512 @@ class PluginRemedioTests(unittest.TestCase):
         r = subprocess.run([sys.executable, str(Path(__file__).parent / 'telegram-plugin-remedio.py')],
                            env=dict(os.environ, CLAUDE_CONFIG_DIR=str(self.root)), capture_output=True)
         self.assertNotEqual(r.returncode, 0); self.assertEqual(server.read_bytes(), original)
+
+
+SID = '0b9e3c1a-1111-4222-8333-444455556666'
+
+
+def _quando(seg=0):
+    return time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(time.time() + seg)) + '.000Z'
+
+
+def _resposta(modelo, seg=-60, ferramenta=None, entrada=None):
+    c = [{'type': 'text', 'text': 'ok'}]
+    if ferramenta: c.append({'type': 'tool_use', 'id': 'x', 'name': ferramenta, 'input': entrada or {}})
+    return {'type': 'assistant', 'timestamp': _quando(seg), 'message': {'model': modelo, 'content': c}}
+
+
+def _esforco(nivel):
+    return {'type': 'system', 'timestamp': _quando(-90), 'output_config': {'effort': nivel}}  # como a conversa registra
+
+
+def _do_dono(texto, seg=-30, audio=False, chat='42', user='42'):
+    extra = ' attachment_kind="voice" attachment_file_id="f1"' if audio else ''
+    return {'type': 'user', 'timestamp': _quando(seg), 'message': {'role': 'user', 'content':
+            f'<channel source="plugin:telegram:telegram" chat_id="{chat}" message_id="9" user="aluno" user_id="{user}" ts="x"{extra}>'
+            f'{"(voice message)" if audio else texto}</channel>'}}
+
+
+def _na_fila(texto, seg=-30):
+    """Mensagem que chegou com a janela trabalhando: o Claude Code grava como anexo da fila (formato visto no 2.1.30x)."""
+    tag = f'<channel source="plugin:telegram:telegram" chat_id="42" message_id="9" user="aluno" user_id="42" ts="x">{texto}</channel>'
+    return {'type': 'attachment', 'timestamp': _quando(seg), 'attachment': {
+        'type': 'queued_command', 'prompt': tag, 'commandMode': 'prompt', 'isMeta': True, 'timestamp': _quando(seg),
+        'origin': {'kind': 'channel', 'server': 'plugin:telegram:telegram'}}}
+
+
+class TurnoJanelaDoBotTests(unittest.TestCase):
+    """Ganchos da janela do bot (7A, 20/10/26): marcam início, ferramenta e fim do turno (Stop e StopFailure), gravam a
+    assinatura, lembram o Telegram a cada mensagem e seguram uma vez o fim que ficou sem reply."""
+    LIMPA = ('TELEGRAM_STATE_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_EFFORT', 'CLAUDE_PID', 'CLAUDE_CODE_SESSION_ID',
+             'MESTREOS_MEUBOT', 'MESTREOS_TELEGRAM_BOT_DIR', 'MESTREOS_TELEGRAM_TROCA_SECO')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
+        self.state = self.root / 'state'; self.bot = self.root / 'bot'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def env(self, **extra):
+        env = {k: v for k, v in os.environ.items() if k not in self.LIMPA}  # o teste roda dentro de uma sessão do Claude
+        env.update(TELEGRAM_STATE_DIR=str(self.state), MESTREOS_TELEGRAM_BOT_DIR=str(self.bot), MESTREOS_TELEGRAM_TROCA_SECO='1')
+        env.update(extra)
+        return env
+
+    def roda(self, evento, entrada='', env=None, **extra):
+        r = subprocess.run([sys.executable, str(SCRIPTS / 'telegram-bot-turno.py'), evento], input=entrada.encode('utf-8'),
+                           env=env or self.env(**extra), capture_output=True, timeout=30)
+        r.stdout, r.stderr = r.stdout.decode('utf-8'), r.stderr.decode('utf-8', 'replace')
+        return r
+
+    def conversa(self, linhas, nome='conversa.jsonl', **campos):
+        t = self.root / nome
+        t.write_text('\n'.join(json.dumps(x, ensure_ascii=False) for x in linhas) + '\n', encoding='utf-8')
+        return json.dumps({'transcript_path': str(t), 'session_id': SID, **campos}, ensure_ascii=False)
+
+    def assinatura(self):
+        return (self.state / 'assinatura').read_text(encoding='utf-8').strip()
+
+    def test_inicio_marks_turn_and_signs_with_model_and_effort(self):
+        antes = int(time.time() * 1000)
+        r = self.roda('inicio', self.conversa([_resposta('claude-sonnet-5-5'), _esforco('medium'),
+                                                _resposta('claude-opus-5-5', -20), _esforco('high')]))
+        self.assertEqual((r.returncode, r.stdout), (0, ''))  # sem a tag do Telegram, nada entra no contexto
+        self.assertGreaterEqual(int((self.state / 'turn-start').read_text().strip()), antes)
+        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5 · alto')  # a última vale
+
+    def test_model_written_in_a_tool_input_does_not_fool_the_signature(self):
+        # a assinatura lê o campo da resposta, nunca o texto: o agente pode estar escrevendo código que cita outro modelo
+        self.roda('inicio', self.conversa([_resposta('claude-opus-5-5', -10, 'Write', {'content': '"model": "claude-haiku-5-5"'})]))
+        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5')
+
+    def test_effort_seen_mid_turn_wins_next_turn(self):
+        # o esforço só aparece no meio do turno (CLAUDE_EFFORT na ferramenta, campo effort no Stop): fica pro próximo início
+        entrada = self.conversa([_resposta('claude-opus-5-5'), _esforco('medium')])
+        self.roda('ferramenta', '{}', CLAUDE_EFFORT='max'); self.roda('inicio', entrada)
+        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5 · máximo')
+        self.roda('fim', json.dumps({'effort': {'level': 'low'}})); self.roda('inicio', entrada)
+        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5 · baixo')
+
+    def test_tool_and_end_only_mark(self):
+        self.assertEqual(self.roda('ferramenta').returncode, 0); self.assertEqual(self.roda('fim').returncode, 0)
+        self.assertTrue((self.state / 'tool-activity').read_text().strip().isdigit())
+        self.assertTrue((self.state / 'turn-end').read_text().strip().isdigit())
+        self.assertFalse((self.state / 'assinatura').exists())
+
+    def test_stop_failure_ends_the_turn_silently(self):
+        # erro de API (limite do plano, sobrecarga) não dispara Stop: sem isso o "digitando" ficaria aceso até o teto
+        r = self.roda('falha', json.dumps({'error': 'rate_limit', 'hook_event_name': 'StopFailure'}))
+        self.assertEqual((r.returncode, r.stdout), (0, ''))
+        self.assertTrue((self.state / 'turn-end').read_text().strip().isdigit())
+
+    def test_bad_input_or_no_conversation_never_fails(self):
+        for entrada in ('isto não é json', json.dumps({'transcript_path': str(self.root / 'nao-existe.jsonl')}), ''):
+            r = self.roda('inicio', entrada)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (0, '', ''))
+        self.assertTrue((self.state / 'turn-start').exists()); self.assertEqual(self.assinatura(), '')
+
+    def test_unknown_event_writes_nothing(self):
+        self.assertEqual(self.roda('qualquer').returncode, 0); self.assertFalse(self.state.exists())
+
+    def test_names_and_effort_labels(self):
+        casos = [('claude-fable-5-1', 'xhigh', '🟣 Claude · Fable 5.1 · altíssimo'), ('claude-haiku-5-5', 'low', '🟣 Claude · Haiku 5.5 · baixo'),
+                 ('claude-opus-5', 'max', '🟣 Claude · Opus 5 · máximo'), ('claude-sonnet-5-5', None, '🟣 Claude · Sonnet 5.5'),
+                 ('claude-sonnet-4-20250514', None, '🟣 Claude · Sonnet 4'), ('claude-opus-5-5[1m]', 'high', '🟣 Claude · Opus 5.5 · alto')]
+        for modelo, esforco, esperado in casos:
+            self.roda('inicio', self.conversa([_resposta(modelo)] + ([_esforco(esforco)] if esforco else [])))
+            self.assertEqual(self.assinatura(), esperado, modelo)
+
+    def test_default_folder_follows_claude_config_dir(self):
+        cfg = self.root / 'cfg'
+        env = {k: v for k, v in self.env(CLAUDE_CONFIG_DIR=str(cfg)).items() if k != 'TELEGRAM_STATE_DIR'}
+        self.assertEqual(self.roda('fim', env=env).returncode, 0)
+        self.assertTrue((cfg / 'channels' / 'telegram' / 'turn-end').exists())  # mesma pasta que o plugin lê
+
+    def test_reminder_only_for_telegram_and_survives_windows_console(self):
+        # 20/10/26: só a regra escrita não fazia o agente trocar a reação; o lembrete vai em toda mensagem do Telegram.
+        # PYTHONIOENCODING=cp1252 imita o console do Windows: caminho com acento e emoji não podem derrubar nada
+        tag = '<channel source="plugin:telegram:telegram" chat_id="42" message_id="9" user="aluno" ts="x">oi</channel>'
+        entrada = self.conversa([_resposta('claude-opus-5-5')], nome='conversa-ação-🟣.jsonl', prompt=tag)
+        r = self.roda('inicio', entrada, PYTHONIOENCODING='cp1252')
+        self.assertEqual(r.returncode, 0)
+        self.assertIn('[Telegram] Responda SEMPRE pela ferramenta reply', r.stdout); self.assertIn('✍', r.stdout)
+        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5')
+        self.assertNotIn('telegram-bot-troca.py', r.stdout)  # "oi" não fala de modelo: sem a dica da troca
+        self.assertEqual(self.roda('inicio', self.conversa([], prompt='pergunta digitada na janela')).stdout, '')
+
+    def test_switch_hint_with_the_exact_command_only_when_it_matters(self):
+        # o agente do aluno não sabe qual Python a máquina usa: a dica traz o comando exato, só quando a mensagem pede
+        tag = '<channel source="plugin:telegram:telegram" chat_id="42" message_id="9" user="aluno" ts="x"{}>{}</channel>'
+        for extra, texto, tem in (('', 'troca pro Sonnet', True), ('', 'muda o esforço pra máximo', True),
+                                  (' attachment_kind="voice" attachment_file_id="f"', '(voice message)', True),
+                                  ('', 'manda a foto do relatório', False)):
+            out = self.roda('inicio', self.conversa([], prompt=tag.format(extra, texto))).stdout
+            self.assertEqual('telegram-bot-troca.py" trocar --pedido' in out, tem, texto)
+            if tem: self.assertIn(sys.executable, out)
+
+    def test_stop_holds_once_when_a_telegram_request_had_no_reply(self):
+        # 20/10/26: uma sessão escreveu a resposta só na tela; a trava do fim pede o reply UMA vez
+        sem = self.conversa([_do_dono('qual a previsão?'), _resposta('claude-opus-5-5', -5)])
+        r = self.roda('fim', sem)
+        self.assertEqual(json.loads(r.stdout)['decision'], 'block'); self.assertIn('ferramenta reply', json.loads(r.stdout)['reason'])
+        segunda = json.loads(sem); segunda['stop_hook_active'] = True
+        self.assertEqual(self.roda('fim', json.dumps(segunda)).stdout, '')  # já segurou uma vez: deixa encerrar
+        com = self.conversa([_do_dono('qual a previsão?'), _resposta('claude-opus-5-5', -5, 'mcp__plugin_telegram_telegram__reply')])
+        self.assertEqual(self.roda('fim', com).stdout, '')
+        self.assertEqual(self.roda('fim', self.conversa([_resposta('claude-opus-5-5', -5)])).stdout, '')  # pedido da janela
+
+    def test_stop_guard_also_sees_a_message_that_arrived_in_the_queue(self):
+        # rodada 2 (revisor A, conferido no transcript real): mensagem que chega com a janela trabalhando vira anexo
+        # "queued_command"; a trava do fim não via esse pedido
+        r = self.roda('fim', self.conversa([_resposta('claude-opus-5-5', -20), _na_fila('e o relatório?', -10),
+                                            _resposta('claude-opus-5-5', -2)]))
+        self.assertEqual(json.loads(r.stdout)['decision'], 'block')
+        self.assertFalse((self.state / 'turn-end').exists())   # segurou: o turno continua, não é fim
+        resumo = {'type': 'user', 'isCompactSummary': True, 'timestamp': _quando(-5), 'message': {'content':
+                  'Resumo: <channel source="plugin:telegram:telegram" chat_id="42" user_id="42">antiga</channel>'}}
+        self.assertEqual(self.roda('fim', self.conversa([resumo, _resposta('claude-opus-5-5', -2)])).stdout, '')
+
+    def test_session_start_records_the_window(self):
+        self.roda('sessao', self.conversa([]), CLAUDE_PID='4242')
+        s = json.loads((self.state / 'sessao.json').read_text(encoding='utf-8'))
+        self.assertEqual((s['pid'], s['sid']), ('4242', SID)); self.assertTrue(s['transcript'].endswith('conversa.jsonl'))
+
+
+class TrocaDeModeloTests(unittest.TestCase):
+    """Troca de modelo e esforço pelo Telegram (7A, 20/10/26): só a frase do dono troca; áudio confirma; a janela reaberta
+    retoma a mesma conversa e avisa assinada com o modelo novo; modelo que falha na 1ª resposta volta pro de antes."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.root = Path(self.tmp.name)
+        self.state = self.root / 'state'; self.bot = self.root / 'bot'; self.t = self.root / 'conversa.jsonl'
+        self.linhas = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def env(self, **extra):
+        env = {k: v for k, v in os.environ.items() if k not in TurnoJanelaDoBotTests.LIMPA}
+        env.update(TELEGRAM_STATE_DIR=str(self.state), MESTREOS_TELEGRAM_BOT_DIR=str(self.bot), CLAUDE_PID='4242',
+                   MESTREOS_MEUBOT='1', MESTREOS_TELEGRAM_TROCA_SECO='1')
+        env.update(extra)
+        return {k: v for k, v in env.items() if v is not None}
+
+    def escreve(self, *linhas):
+        self.linhas += list(linhas)
+        self.t.write_text('\n'.join(json.dumps(x, ensure_ascii=False) for x in self.linhas) + '\n', encoding='utf-8')
+
+    def gancho(self, evento, pid='4242', **campos):
+        entrada = json.dumps({'transcript_path': str(self.t), 'session_id': SID, **campos}, ensure_ascii=False)
+        r = subprocess.run([sys.executable, str(SCRIPTS / 'telegram-bot-turno.py'), evento], input=entrada.encode('utf-8'),
+                           env=self.env(CLAUDE_PID=pid), capture_output=True, timeout=30)
+        return r.stdout.decode('utf-8')
+
+    def troca(self, *args, **extra):
+        r = subprocess.run([sys.executable, str(SCRIPTS / 'telegram-bot-troca.py')] + list(args), env=self.env(**extra),
+                           capture_output=True, timeout=60)
+        return r.returncode, r.stdout.decode('utf-8')
+
+    def janela(self, *linhas, pid='4242'):
+        self.state.mkdir(exist_ok=True)   # a lista de acesso do plugin: só o 42 fala com o bot
+        (self.state / 'access.json').write_text(json.dumps({'dmPolicy': 'allowlist', 'allowFrom': ['42'], 'groups': {}}))
+        self.escreve(*linhas); self.gancho('sessao', pid=pid)
+
+    def arquivo(self, nome):
+        p = self.bot / nome
+        return p.read_text(encoding='ascii').strip() if p.exists() else None
+
+    def estado(self):
+        return json.loads((self.bot / 'troca.json').read_text(encoding='utf-8'))
+
+    def espera_estado(self, valor, teto=15):
+        fim = time.time() + teto
+        while time.time() < fim:
+            try:
+                if self.estado().get('estado') == valor: return True
+            except (OSError, ValueError): pass
+            time.sleep(0.1)
+        return False
+
+    def test_clear_phrase_switches_and_the_window_comes_back_signed(self):
+        self.janela(_resposta('claude-opus-5-5', -120), _esforco('high'), _do_dono('troca pro sonnet', -5))
+        rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet')
+        self.assertEqual(rc, 0, out); self.assertIn('OK:', out); self.assertIn('⏳ Trocando pra Sonnet', out)
+        self.assertEqual(self.arquivo('opcoes'), '--model sonnet')
+        self.assertEqual(self.arquivo('retomar'), f'--resume {SID} MESTREOS_TROCA_CONCLUIDA_42')
+        self.assertEqual(self.estado()['estado'], 'pedido')
+        # o agente manda o "⏳" e encerra; a derrubada vê o fim do turno e marca o reinício
+        self.state.mkdir(exist_ok=True)
+        (self.state / 'turn-start').write_text(str(int(time.time() * 1000) - 5000))
+        (self.state / 'turn-end').write_text(str(int(time.time() * 1000) + 10))
+        self.assertEqual(self.troca('derrubar', '4242', str(int(time.time() * 1000) - 1000))[0], 0)
+        self.assertEqual(self.estado()['estado'], 'reiniciando')
+        # a janela reabre (processo novo, MESMA conversa): a assinatura já sai com o modelo pedido
+        self.gancho('sessao', pid='5151')
+        self.assertEqual(self.estado()['estado'], 'voltou')
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Sonnet')
+        self.escreve({'type': 'user', 'timestamp': _quando(), 'message': {'role': 'user', 'content': 'MESTREOS_TROCA_CONCLUIDA_42'}})
+        aviso = self.gancho('inicio', pid='5151', prompt='MESTREOS_TROCA_CONCLUIDA_42')
+        self.assertIn('chat_id 42', aviso); self.assertIn('✅ Pronto, agora estou no Sonnet · esforço padrão.', aviso)
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Sonnet')  # a conversa só tem o Opus
+        self.assertEqual(json.loads(self.gancho('fim', pid='5151'))['decision'], 'block')  # voltou sem avisar: segura
+        self.assertEqual(self.estado()['estado'], 'voltou')   # o turno continua: ainda não deu certo
+        self.escreve(_resposta('claude-sonnet-5-5', 1, 'mcp__plugin_telegram_telegram__reply'), _esforco('medium'))
+        self.assertEqual(self.gancho('fim', pid='5151', stop_hook_active=True), '')
+        self.assertEqual(self.estado()['estado'], 'ok')
+        self.gancho('inicio', pid='5151', prompt='oi')
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Sonnet 5.5 · médio')  # 1ª resposta nova
+
+    def test_one_message_is_worth_one_switch(self):
+        self.janela(_do_dono('troca pro sonnet', -5))
+        self.assertEqual(self.troca('trocar', '--pedido', 'troca pro sonnet')[0], 0)
+        self.concluir()   # a janela reabriu e a troca deu certo
+        rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet')  # a janela reaberta relê a conversa: não repete
+        self.assertEqual(rc, 2); self.assertIn('mensagem nova', out)
+
+    def test_rewritten_phrase_is_refused(self):
+        # a trava de uma aluna (20/10/26): o agente reescreveu um pedido recusado até passar
+        self.janela(_do_dono('acho que hoje o sonnet resolve', -5))
+        rc, out = self.troca('trocar', '--pedido', 'troca pro haiku')
+        self.assertEqual(rc, 2); self.assertIn('literal', out)
+        self.assertIsNone(self.arquivo('opcoes')); self.assertIsNone(self.arquivo('retomar'))
+
+    def test_audio_always_confirms_and_typed_yes_switches(self):
+        self.janela(_do_dono('', -5, audio=True))
+        rc, out = self.troca('trocar', '--pedido', 'troca pro haiku', '--modelo', 'Haiku')
+        self.assertEqual(rc, 3); self.assertIn('Entendi: trocar pra Haiku', out); self.assertIsNone(self.arquivo('opcoes'))
+        rc, out = self.troca('confirmar', '--pedido', 'sim')
+        self.assertEqual(rc, 2); self.assertIn('ainda não respondeu', out)
+        self.escreve(_do_dono('sim, pode', 2))
+        self.assertEqual(self.troca('confirmar', '--pedido', 'claro')[0], 2)  # o que ele não disse não vale
+        rc, out = self.troca('confirmar', '--pedido', 'sim, pode')
+        self.assertEqual(rc, 0, out); self.assertEqual(self.arquivo('opcoes'), '--model haiku')
+        self.assertFalse((self.bot / 'pendente.json').exists())
+
+    def test_no_cancels_and_loose_phrase_confirms(self):
+        self.janela(_do_dono('será que o sonnet não é melhor pra hoje?', -5))
+        rc, out = self.troca('trocar', '--pedido', 'será que o sonnet não é melhor pra hoje?')
+        self.assertEqual(rc, 3, out)
+        self.escreve(_do_dono('não, deixa', 2))
+        rc, out = self.troca('confirmar', '--pedido', 'não, deixa')
+        self.assertEqual(rc, 0); self.assertIn('CANCELADO', out); self.assertIsNone(self.arquivo('opcoes'))
+
+    def test_effort_only_same_and_back_to_default(self):
+        self.bot.mkdir(); (self.bot / 'opcoes').write_text('--model opus --effort high\n', encoding='ascii')
+        self.janela(_do_dono('modelo opus', -20))
+        rc, out = self.troca('trocar', '--pedido', 'modelo opus')
+        self.assertEqual(rc, 0); self.assertIn('IGUAL', out); self.assertIsNone(self.arquivo('retomar'))
+        self.escreve(_do_dono('esforço máximo', -10))
+        self.assertEqual(self.troca('trocar', '--pedido', 'esforço máximo')[0], 0)
+        self.assertEqual(self.arquivo('opcoes'), '--model opus --effort max')
+        self.concluir()
+        self.escreve(_do_dono('esforço padrão', -5))
+        self.assertEqual(self.troca('trocar', '--pedido', 'esforço padrão')[0], 0)
+        self.assertEqual(self.arquivo('opcoes'), '--model opus')   # esforço padrão = sem --effort; o modelo fica
+        self.concluir()
+        # rodada 2 (revisor A, lido no binário do Claude Code): a conversa retomada restaura o modelo dela, então
+        # "modelo padrão" não teria efeito e o aviso mentiria: só por nome
+        self.escreve(_do_dono('volta tudo pro padrão', -2))
+        rc, out = self.troca('trocar', '--pedido', 'volta tudo pro padrão')
+        self.assertEqual(rc, 2, out); self.assertIn('só troco por nome', out)
+        self.assertEqual(self.arquivo('opcoes'), '--model opus')
+
+    def concluir(self):
+        """A janela reabriu e a troca deu certo (o que o SessionStart e o Stop fariam)."""
+        t = self.estado(); t['estado'] = 'ok'; (self.bot / 'troca.json').write_text(json.dumps(t))
+
+    def test_one_switch_at_a_time(self):
+        # rodada 2 (revisor A, t7): a 2ª troca antes de a janela fechar sobrescrevia o "de antes" e soltava 2 derrubadas
+        self.bot.mkdir(); (self.bot / 'opcoes').write_text('--model opus --effort high\n', encoding='ascii')
+        self.janela(_do_dono('troca pro fable', -10))
+        self.assertEqual(self.troca('trocar', '--pedido', 'troca pro fable')[0], 0)
+        self.escreve(_do_dono('troca pro sonnet', -3))
+        rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet')
+        self.assertEqual(rc, 2, out); self.assertIn('em andamento', out)
+        self.assertEqual(self.estado()['de'], ['opus', 'high'])   # o "de antes" é o que funcionava
+
+    def test_negated_or_partial_message_never_switches_right_away(self):
+        # rodada 2 (os dois revisores): a trava literal aceitava recorte e negação
+        self.janela(_do_dono('não troca pro sonnet', -5))
+        for pedido in ('troca pro sonnet', 'não troca pro sonnet'):
+            rc, out = self.troca('trocar', '--pedido', pedido)
+            self.assertEqual(rc, 3, out); self.assertIn('CONFIRMAR', out)
+        self.assertIsNone(self.arquivo('opcoes')); self.assertIsNone(self.arquivo('retomar'))
+        self.escreve(_do_dono('troca pro sonnet e depois me manda o relatório', -3))
+        self.assertEqual(self.troca('trocar', '--pedido', 'troca pro sonnet')[0], 3)   # pedaço: confirma antes
+        self.escreve(_do_dono('para de usar o opus', -2))
+        self.assertEqual(self.troca('trocar', '--pedido', 'para de usar o opus')[0], 3)
+        self.assertIsNone(self.arquivo('opcoes'))
+
+    def test_text_quoted_from_a_dragged_message_is_not_the_owner_speaking(self):
+        self.janela(_do_dono('[o dono respondeu arrastando esta sua mensagem: «Quer que eu troque pro Sonnet?»]\nNão quero isso.', -5))
+        rc, out = self.troca('trocar', '--pedido', 'troque pro Sonnet')
+        self.assertEqual(rc, 2, out); self.assertIn('literal', out)
+        self.assertIsNone(self.arquivo('opcoes'))
+
+    def test_only_the_owner_in_private_counts(self):
+        # rodada 2 (revisor A, N2): mensagem de grupo ou de outra pessoa não é o dono pedindo
+        self.janela(_do_dono('troca pro sonnet', -6, chat='-100777', user='42'), _do_dono('troca pro sonnet', -5, chat='777', user='777'))
+        rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet')
+        self.assertEqual(rc, 2, out); self.assertIsNone(self.arquivo('opcoes'))
+
+    def test_a_message_that_arrived_in_the_queue_counts(self):
+        # rodada 2 (revisor A, conferido no transcript real): com a janela trabalhando, a mensagem vira anexo da fila
+        self.janela(_resposta('claude-opus-5-5', -20), _na_fila('troca pro sonnet', -5))
+        rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet')
+        self.assertEqual(rc, 0, out); self.assertEqual(self.arquivo('opcoes'), '--model sonnet')
+
+    def test_a_question_or_chatter_is_not_a_yes(self):
+        # rodada 2 (revisor A, T8): "vai chover amanhã?" contava como sim por causa do "vai"
+        self.janela(_do_dono('', -5, audio=True))
+        self.assertEqual(self.troca('trocar', '--pedido', 'troca pro haiku', '--modelo', 'Haiku')[0], 3)
+        self.escreve(_do_dono('vai chover amanhã em BH?', 2))
+        rc, out = self.troca('confirmar', '--pedido', 'vai chover amanhã em BH?')
+        self.assertEqual(rc, 3, out); self.assertIn('AMBIGUO', out); self.assertIsNone(self.arquivo('opcoes'))
+
+    def test_only_inside_the_bot_window_opened_by_meubot(self):
+        self.janela(_do_dono('troca pro sonnet', -5))
+        rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet', CLAUDE_PID='9999')
+        self.assertEqual(rc, 2); self.assertIn('janela do bot', out)
+        rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet', MESTREOS_MEUBOT=None)
+        self.assertEqual(rc, 2); self.assertIn('meubot', out); self.assertIsNone(self.arquivo('opcoes'))
+
+    def test_new_model_failing_goes_back_once_then_stops(self):
+        self.bot.mkdir(); (self.bot / 'opcoes').write_text('--model fable\n', encoding='ascii')
+        (self.bot / 'troca.json').write_text(json.dumps({'estado': 'voltou', 'de': ['opus', 'high'], 'para': ['fable', None],
+                                                          'sid': SID, 'chat': '42', 't': time.time(), 'pid': '5151'}))
+        self.escreve(_resposta('claude-opus-5-5', -60))
+        self.gancho('sessao', pid='5151')   # a janela reaberta é a 5151 (o SessionStart registra)
+        self.gancho('falha', pid='5151', error='invalid_request')
+        self.assertTrue(self.espera_estado('revertendo'), self.estado())
+        self.assertEqual(self.arquivo('opcoes'), '--model opus --effort high')
+        self.assertEqual(self.arquivo('retomar'), f'--resume {SID} MESTREOS_TROCA_FALHOU_42')
+        self.gancho('sessao', pid='6161')
+        self.assertEqual(self.estado()['estado'], 'voltou-antes')
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Opus · alto')
+        aviso = self.gancho('inicio', pid='6161', prompt='MESTREOS_TROCA_FALHOU_42')
+        self.assertIn('⚠️ Não consegui trocar pra Fable', aviso); self.assertIn('invalid_request', aviso)
+        (self.bot / 'retomar').unlink()   # o meubot já leu
+        self.gancho('falha', pid='6161', error='rate_limit')  # nem o de antes respondeu: para de reabrir
+        self.assertTrue(self.espera_estado('falhou'), self.estado()); self.assertIsNone(self.arquivo('retomar'))
+
+    def _impostor(self, nome):
+        """Um processo que se chama `nome` (o teste não pode fechar o Claude de verdade)."""
+        if os.name == 'nt':
+            exe = self.root / (nome + '.exe'); __import__('shutil').copy(r'C:\Windows\System32\ping.exe', exe)
+            return subprocess.Popen([str(exe), '-n', '60', '127.0.0.1'], stdout=subprocess.DEVNULL)
+        exe = self.root / nome; os.symlink('/bin/sleep', exe)   # cópia do sleep o macOS mata; o link vale
+        return subprocess.Popen([str(exe), '60'])
+
+    def test_real_switch_closes_the_window_only_after_the_turn_ends(self):
+        # de ponta a ponta, sem modo de teste: o pedido desacopla a derrubada, ela espera o fim do turno e fecha a janela
+        janela = self._impostor('claude')
+        try:
+            self.janela(_do_dono('troca pro sonnet', -5), pid=str(janela.pid))
+            self.gancho('inicio', pid=str(janela.pid), prompt='troca pro sonnet')
+            rc, out = self.troca('trocar', '--pedido', 'troca pro sonnet', CLAUDE_PID=str(janela.pid), MESTREOS_TELEGRAM_TROCA_SECO=None)
+            self.assertEqual(rc, 0, out)
+            time.sleep(2.5)
+            self.assertIsNone(janela.poll())   # o agente ainda está mandando o "⏳": a janela continua aberta
+            self.escreve(_resposta('claude-opus-5-5', 0, 'mcp__plugin_telegram_telegram__reply'))   # o "⏳ Trocando…"
+            self.gancho('fim', pid=str(janela.pid))   # turno acabou
+            fim = time.time() + 15
+            while janela.poll() is None and time.time() < fim: time.sleep(0.2)
+            self.assertIsNotNone(janela.poll(), 'a janela não fechou depois do fim do turno')
+            self.assertEqual(self.estado()['estado'], 'reiniciando')
+            self.assertEqual(self.arquivo('retomar'), f'--resume {SID} MESTREOS_TROCA_CONCLUIDA_42')  # o meubot reabre
+        finally:
+            if janela.poll() is None: janela.kill()
+            janela.wait(10)
+
+    def test_closing_only_hits_the_claude_process(self):
+        self.state.mkdir(); self.bot.mkdir()
+        (self.state / 'turn-start').write_text(str(int(time.time() * 1000) - 5000))
+        (self.state / 'turn-end').write_text(str(int(time.time() * 1000)))
+        for nome, janela_dele, fecha in (('claude', True, True), ('outro', True, False), ('claude', False, False)):
+            p = self._impostor(nome)
+            try:
+                (self.bot / 'retomar').write_text('--resume x MESTREOS_TROCA_CONCLUIDA_42\n', encoding='ascii')
+                (self.bot / 'troca.json').write_text('{"estado": "pedido"}')
+                # rodada 2 (revisor A, N1): só fecha se o processo ainda for a janela do bot registrada
+                (self.state / 'sessao.json').write_text(json.dumps({'pid': str(p.pid) if janela_dele else '1'}))
+                time.sleep(0.3)
+                self.assertEqual(self.troca('derrubar', str(p.pid), '0', MESTREOS_TELEGRAM_TROCA_SECO=None)[0], 0)
+                time.sleep(0.5)
+                self.assertEqual(p.poll() is not None, fecha, (nome, janela_dele))
+                self.assertEqual((self.bot / 'retomar').exists(), fecha, (nome, janela_dele))  # não fechou: não reabre
+            finally:
+                if p.poll() is None: p.kill()
+                p.wait(10)
+            (self.root / 'claude').unlink(missing_ok=True); (self.root / 'claude.exe').unlink(missing_ok=True)
+
+    # ---- rodada 2 (os dois revisores): nunca fechar a janela com o turno aberto
+    def test_a_message_arriving_while_closing_keeps_the_window_open_until_its_turn_ends(self):
+        janela = self._impostor('claude')
+        try:
+            self.state.mkdir(exist_ok=True); self.bot.mkdir(exist_ok=True)
+            (self.state / 'sessao.json').write_text(json.dumps({'pid': str(janela.pid)}))
+            (self.state / 'turn-start').write_text(str(int(time.time() * 1000) - 5000))
+            (self.state / 'turn-end').write_text(str(int(time.time() * 1000)))
+            (self.bot / 'troca.json').write_text('{"estado": "pedido"}')
+            (self.bot / 'retomar').write_text('--resume x MESTREOS_TROCA_CONCLUIDA_42\n', encoding='ascii')
+            p = subprocess.Popen([sys.executable, str(SCRIPTS / 'telegram-bot-troca.py'), 'derrubar', str(janela.pid), '0'],
+                                 env=self.env(MESTREOS_TELEGRAM_TROCA_SECO=None), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+            (self.state / 'turn-start').write_text(str(int(time.time() * 1000)))   # chegou mensagem: turno novo
+            time.sleep(3)
+            self.assertIsNone(janela.poll(), 'fechou a janela no meio do turno novo')
+            self.assertEqual(self.estado()['estado'], 'pedido')   # nada marcado como reinício ainda
+            (self.state / 'turn-end').write_text(str(int(time.time() * 1000) + 5))   # o turno novo acabou
+            fim = time.time() + 15
+            while janela.poll() is None and time.time() < fim: time.sleep(0.2)
+            self.assertIsNotNone(janela.poll(), 'não fechou depois que o turno novo acabou')
+            self.assertEqual(self.estado()['estado'], 'reiniciando')
+            p.wait(20)
+        finally:
+            if janela.poll() is None: janela.kill()
+            janela.wait(10)
+
+    def test_window_that_never_quiets_is_not_closed_and_the_switch_is_undone(self):
+        # rodada 2 (revisor A, W1-i e tarefas em segundo plano): estourada a espera, cancela em vez de fechar
+        self.bot.mkdir(); (self.bot / 'opcoes').write_text('--model sonnet\n', encoding='ascii')
+        self.state.mkdir(); agora = int(time.time() * 1000)
+        (self.state / 'turn-start').write_text(str(agora - 5000)); (self.state / 'turn-end').write_text(str(agora))
+        (self.state / 'segundo-plano.json').write_text(json.dumps({'n': 1, 'ts': agora}))   # build rodando ao fundo
+        (self.state / 'sessao.json').write_text(json.dumps({'pid': '4242'}))
+        (self.bot / 'troca.json').write_text(json.dumps({'estado': 'pedido', 'de': ['opus', None], 'para': ['sonnet', None], 't': time.time()}))
+        (self.bot / 'retomar').write_text('--resume x MESTREOS_TROCA_CONCLUIDA_42\n', encoding='ascii')
+        self.assertEqual(self.troca('derrubar', '4242', '0', MESTREOS_TELEGRAM_TROCA_ESPERA='2')[0], 0)
+        self.assertEqual(self.estado()['estado'], 'cancelada')
+        self.assertEqual(self.arquivo('opcoes'), '--model opus')   # volta pro que estava
+        self.assertIsNone(self.arquivo('retomar'))
+
+    def test_stop_that_holds_the_turn_does_not_mark_its_end(self):
+        # rodada 2 (os dois revisores): o gancho gravava turn-end antes de segurar o Stop, e a troca fechava a janela
+        # no meio do reply que faltava
+        self.escreve(_do_dono('qual a previsão?', -5), _resposta('claude-opus-5-5', -2))
+        self.state.mkdir(exist_ok=True); (self.state / 'turn-end').write_text('1000000000000')
+        self.assertEqual(json.loads(self.gancho('fim'))['decision'], 'block')
+        self.assertEqual((self.state / 'turn-end').read_text().strip(), '1000000000000')
+        self.assertEqual(self.gancho('fim', stop_hook_active=True, background_tasks=[{'id': 'b1'}]), '')
+        self.assertGreater(int((self.state / 'turn-end').read_text().strip()), 1000000000000)
+        self.assertEqual(json.loads((self.state / 'segundo-plano.json').read_text())['n'], 1)
+
+    def test_shortcut_only_passes_words_from_the_list(self):
+        # rodada 2 (revisor A, W5): o meubot passava o conteúdo cru dos arquivos ao claude (flag qualquer; & no Windows)
+        self.bot.mkdir()
+        (self.bot / 'opcoes').write_text('--model sonnet --effort high\n', encoding='ascii')
+        (self.bot / 'retomar').write_text(f'--resume {SID} MESTREOS_TROCA_CONCLUIDA_42\n', encoding='ascii')
+        rc, out = self.troca('atalho')
+        self.assertEqual(out.strip(), f'--model sonnet --effort high --resume {SID} MESTREOS_TROCA_CONCLUIDA_42')
+        self.assertIsNone(self.arquivo('retomar'))   # vale uma vez
+        (self.bot / 'retomar').write_text(f'--resume {SID} MESTREOS_TROCA_CONCLUIDA_42\n', encoding='ascii')
+        self.assertEqual(self.troca('atalho', '--inicio')[1].strip(), '--model sonnet --effort high')   # sobra velha: não
+        self.assertIsNone(self.arquivo('retomar'))
+        for ruim in ('--model sonnet --dangerously-skip-permissions', '--model sonnet & echo x', '--model gpt-9'):
+            (self.bot / 'opcoes').write_text(ruim + '\n', encoding='ascii')
+            (self.bot / 'retomar').write_text(f'--resume {SID} MESTREOS_TROCA_CONCLUIDA_42 & del x\n', encoding='ascii')
+            self.assertEqual(self.troca('atalho')[1].strip(), '', ruim)
 
 
 class DpapiPowershellTests(unittest.TestCase):

@@ -1,19 +1,22 @@
 {
-  "version": "4.0.5",
+  "version": "4.0.6",
   "released": "2026-10-20",
   "files": {
     ".meuos/hooks/cerebro.py": "ea48c22abf824f4c38a36268f4614aef2be04201ce7183ef4bb9e042b0c85548",
     ".meuos/hooks/telegram_runtime.py": "d3609ad79379b74fc7d688a25f506bf5094c8292510e1276115af99a6f40560f",
     ".meuos/scripts/telegram_janela.py": "592a399554f0d0e5783c062e0df27e62b0c133d1979e90bb1273401b59743f52",
-    ".meuos/scripts/test-telegram-runtime.py": "da2ca993a49f51e8e841c177253bb74db8e884af2ce7f58eb314c5fe5daa0f44",
+    ".meuos/scripts/test-telegram-runtime.py": "9a47bc9039b2ac5393912ba64354cc063b3045f78de363b0b3fc0ca43e1dedaf",
     ".meuos/scripts/telegram-recovery.py": "96a8e9238af1cc62369f77504786c4d3b34b40fdb36844104c8fca32f33e3cf9",
     ".meuos/scripts/telegram_send.py": "2aa540580dd4db477c551c2d1e8a8cc94321d9e9d91a2f8453ee660238374f49",
-    ".meuos/scripts/telegram-update.py": "c0684cc1b6d8680f675533ab06d6e182dac4aa511fcfbc8e01282caa330d7e13",
-    ".meuos/scripts/telegram-plugin-remedio.py": "745a0fdb240bbeef6c00c70f11d174dfa52a969b354701965c1048c475a98387"
+    ".meuos/scripts/telegram-update.py": "cc99a0653e409dfbbd2b8abeddbe30738f56a1a1d1392994737ff093a96d90fc",
+    ".meuos/scripts/telegram-plugin-remedio.py": "128882673e3d378e649d27315d5e6be77df887e615d749a5c055891cb6a21866",
+    ".meuos/scripts/telegram-bot-turno.py": "b184ff74a3e4487d85163a993c127fdd2ab574165a2c931bb5fae9972bee0e91",
+    ".meuos/scripts/telegram-bot-troca.py": "940915c0aa3b1632f9cb09b6ea7d0cd3d87b6f2a7b68749ec977f4306065be4b",
+    ".meuos/scripts/telegram-janela-do-bot.md": "fa8ee4807238405a0d06353b63056c86d07719fffa2e5e1d664db76bad8a565f"
   },
   "validation": {
-    "mac": "31 cerebro + 41 janela + 47 unittest offline checks passed, macOS Python 3.9.6 (20/10/2026)",
-    "windows": "31 cerebro + 41 janela + 47 unittest (2 skipped: bun not installed in the VM; symlink needs a special Windows permission) offline checks passed, Windows 11 ARM Python 3.12.10 inside PowerShell 7.6.7, identical file hashes (20/10/2026). Real DPAPI vault test without mocks: 4.0.4 fails to open it, 4.0.5 opens it.",
+    "mac": "31 cerebro + 41 janela + 91 unittest offline checks passed, macOS Python 3.9.6; remedied 0.0.7 plugin end to end in bun against a fake Bot API 26/26; meubot launcher with the exact guide text in zsh 9/9 (20/10/2026)",
+    "windows": "31 cerebro + 41 janela + 91 unittest (1 skipped: symlink needs a special Windows permission) offline checks passed, Windows 11 ARM Python 3.12.10, identical file hashes; 6 remedies applied to a CRLF server.ts, then the plugin end to end in Windows bun 26/26; meubot.cmd in Command Prompt, Windows PowerShell 5.1 and PowerShell 7 27/27 (20/10/2026)",
     "live_per_account": "required during installation (7D.9 on the phone, both directions)"
   }
 }
