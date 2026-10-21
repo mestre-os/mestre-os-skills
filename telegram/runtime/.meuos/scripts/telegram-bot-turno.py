@@ -18,7 +18,10 @@ e sempre sai 0: gancho que falha não pode travar a conversa do aluno. Entrada e
 """
 import json, os, re, subprocess, sys, time, unicodedata
 
-EFF = {"low": "baixo", "medium": "médio", "high": "alto", "xhigh": "altíssimo", "max": "máximo"}
+# Esforço pelo nome oficial, sem tradução (21/10/2026): é o id do `claude --effort`, o mesmo que a Anthropic mostra. A chave
+# é o que o Claude Code grava; o valor é só o que o aluno lê. "ultracode" é interruptor (xhigh + vários agentes), não nível.
+EFF = {nivel: nivel for nivel in ("low", "medium", "high", "xhigh", "max")}
+CEREBRO = "🧠"   # emoji único de toda assinatura de modelo, Claude ou OpenAI (pedido do dono, 21/10/2026)
 MODELO_ALIAS = {"fable": "Fable", "opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku"}
 EVENTOS = {"sessao": "", "inicio": "turn-start", "ferramenta": "tool-activity", "fim": "turn-end", "falha": "turn-end"}
 DO_TELEGRAM = re.compile(r'<channel source="(?:plugin:)?telegram')  # a tag que o plugin põe na mensagem que chega
@@ -27,8 +30,9 @@ TROCA = re.compile(r"^MESTREOS_TROCA_(CONCLUIDA|FALHOU)_(-?\d{1,20})$")  # 1ª m
 LEMBRETE = ("[Telegram] Responda SEMPRE pela ferramenta reply: o que fica escrito na tela não chega ao celular. "
             "A reação de chegada (✍ no áudio, 👀 no resto) já foi automática: assim que entender a mensagem (no áudio, "
             "logo depois de ouvir), troque pela pertinente com a ferramenta react: ❤ grato · 🔥 empolga · 🙏 desculpa · "
-            "👍 ok · 🤝 fechado · 🤣 graça · 😢 notícia triste · 🫡 ordem recebida. Texto pra ele mandar a outra pessoa: "
-            "o text do reply começa com [[limpo]].")
+            "👍 ok · 🤝 fechado · 🤣 graça · 😢 notícia triste · 🫡 ordem recebida. Texto pra ele copiar e mandar a outra pessoa: "
+            "o text do reply começa com [[limpo]] e vai sozinho no balão. A assinatura do modelo é só do Telegram: e-mail ou "
+            "qualquer outro canal nunca leva.")
 FALA_DE_TROCA = re.compile(r"\b(modelo|esforco|sonnet|opus|haiku|fable|padrao)\b")
 SEM_REPLY = ("Este pedido veio do Telegram e você ia encerrar sem usar a ferramenta reply: o dono não vê o que ficou na "
              "tela. Se o pedido pedia resposta, mande agora pelo reply (chat_id da tag <channel>), sem repetir o que já "
@@ -140,7 +144,7 @@ def ultimo_modelo(dado):
 
 
 def assinatura(dado, sessao, esforco_marcado=""):
-    """Mesmo formato da janela da Dupla (7D): "🟣 Claude · Opus 5.5 · alto". Logo depois de uma troca de modelo, a
+    """Mesmo formato da janela da Dupla (7D): "🧠 Claude · Opus 5.5 · high". Logo depois de uma troca de modelo, a
     conversa ainda só tem respostas do modelo antigo: vale o modelo que a troca pediu (gravado no SessionStart), até a
     primeira resposta nova. Sem modelo conhecido (1º turno de conversa nova), não assina."""
     mid, quando = ultimo_modelo(dado)
@@ -154,7 +158,7 @@ def assinatura(dado, sessao, esforco_marcado=""):
     esf = EFF.get(esforco_marcado or esf, "")
     if not nome:
         return ""
-    return f"🟣 Claude · {nome} · {esf}" if esf else f"🟣 Claude · {nome}"
+    return f"{CEREBRO} Claude · {nome} · {esf}" if esf else f"{CEREBRO} Claude · {nome}"
 
 
 def textos_do_usuario(o):

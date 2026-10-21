@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -133,13 +134,78 @@ class CerebroTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, out, '')
         with patch.object(cerebro, '_run_stdin', side_effect=fake_run):
             acoes = cerebro.responder(self.msg('oi', imagens=[str(self.root / 'f.jpg')]))
-        self.assertEqual(acoes[0][0], 'texto'); self.assertIn('pronto', acoes[0][1]); self.assertIn('🟣 Claude · Opus 5', acoes[0][1])
+        self.assertEqual(acoes[0][0], 'texto'); self.assertIn('pronto', acoes[0][1]); self.assertIn('🧠 Claude · Opus 5', acoes[0][1])
         self.assertIn('--session-id', seen['cmd']); self.assertNotIn('oi', seen['cmd'])  # prompt vai pelo stdin, nunca pelo argv (item, não texto: a pasta temporária sorteada podia conter "oi")
         self.assertIn('<channel source="mestreos-telegram"', seen['prompt']); self.assertIn('f.jpg', seen['prompt'])
         st = cerebro.load(); self.assertEqual(st['claude']['sessao'], 'sess-1'); self.assertEqual(st['claude']['modelo'], 'claude-opus-5')
         with patch.object(cerebro, '_run_stdin', side_effect=fake_run):
             cerebro.responder(self.msg('de novo'))
         self.assertIn('--resume', seen['cmd']); self.assertIn('sess-1', seen['cmd'])
+
+    def test_signature_is_always_the_brain_emoji(self):
+        # 21/10/26 (pedido do dono): toda assinatura de modelo começa com 🧠, Claude ou OpenAI. Sai o roxo do Claude e o
+        # emoji de cada modelo da OpenAI; o resto do formato não muda.
+        casos = [('claude', 'opus', '🧠 Claude · Opus'), ('claude', 'claude-opus-5-5', '🧠 Claude · Opus 5.5'), ('claude', None, '🧠 Claude'),
+                 ('codex', 'gpt-5.6-sol', '🧠 Sol'), ('codex', 'gpt-5.6-terra', '🧠 Terra'), ('codex', 'gpt-5.6-luna', '🧠 Luna'),
+                 ('codex', 'gpt-6-astra', '🧠 Astra'), ('codex', None, '🧠 OpenAI')]
+        for motor, modelo, esperado in casos:
+            self.assertEqual(cerebro.assinatura(motor, modelo), esperado, (motor, modelo))
+            for velho in ('🟣', '☀', '🌍', '🌙', '✨', '🟢'): self.assertNotIn(velho, cerebro.assinatura(motor, modelo), (motor, modelo, velho))
+        self.assertTrue(cerebro.status_txt(cerebro.load()).startswith('🧠 Cérebro ligado: 🧠 Claude'))   # o status usa a mesma assinatura
+        with patch.object(cerebro, 'FAKE_CLAUDE', 'oi do claude'):
+            self.assertTrue(cerebro.responder(self.msg('oi'))[-1][1].endswith('\n\n🧠 Claude · Claude'))   # o modelo do dublê não tem nome conhecido
+        st = cerebro.load(); st['ativo'] = 'codex'; cerebro.save(st)
+        with patch.object(cerebro, 'FAKE_CODEX', 'oi do codex'):
+            self.assertEqual(cerebro.responder(self.msg('oi'))[-1][1], 'oi do codex\n\n🧠 Sol')
+
+    def test_clean_marker_sends_the_text_without_marker_or_signature(self):
+        # 21/10/26: texto pra ele copiar e mandar a outra pessoa começa com [[limpo]] (a mesma marca do 7A): a marca some e a
+        # assinatura do modelo não entra. Qualquer outra resposta continua assinada.
+        casos = [('[[limpo]]\nBom dia, síndico.', 'Bom dia, síndico.'), ('  [[limpo]]   Bom dia.', 'Bom dia.'),
+                 ('\r\n[[limpo]]\r\nLinha 1\r\nLinha 2\r\n', 'Linha 1\r\nLinha 2'),    # fim de linha do Windows
+                 ('[reagir:🤝] [[limpo]]\nCombinado.', 'Combinado.'), ('[[limpo]] [reagir:🤝]\nCombinado.', 'Combinado.')]
+        for motor in ('claude', 'codex'):
+            st = cerebro.load(); st['ativo'] = motor; cerebro.save(st)
+            for resposta, texto in casos:
+                with patch.object(cerebro, 'FAKE_CLAUDE' if motor == 'claude' else 'FAKE_CODEX', resposta):
+                    acoes = cerebro.responder(self.msg('manda pra ele'))
+                self.assertEqual([a[1] for a in acoes if a[0] == 'texto'], [texto], (motor, resposta))
+                self.assertEqual(('reagir', '🤝') in acoes, '[reagir:' in resposta, (motor, resposta))
+        # sem a marca no começo, nada muda: a assinatura entra e uma "marca" no meio do texto é só texto
+        st = cerebro.load(); st['ativo'] = 'claude'; cerebro.save(st)
+        with patch.object(cerebro, 'FAKE_CLAUDE', 'Segue o texto. [[limpo]] no meio'):
+            texto = [a[1] for a in cerebro.responder(self.msg('oi')) if a[0] == 'texto'][0]
+        self.assertTrue(texto.startswith('Segue o texto. [[limpo]] no meio\n\n🧠 Claude'), texto)
+
+    def test_marker_only_sends_nothing_and_does_not_crash(self):
+        for resposta in ('[[limpo]]', '  [[limpo]]  ', '[[limpo]]\r\n', '[reagir:👍] [[limpo]]\n'):
+            with patch.object(cerebro, 'FAKE_CLAUDE', resposta):
+                acoes = cerebro.responder(self.msg('oi'))
+            self.assertEqual([a for a in acoes if a[0] == 'texto'], [], resposta)
+            self.assertFalse(any(a[0] == 'falha' for a in acoes), resposta)
+
+    def test_clean_marker_survives_the_real_output_paths_with_windows_line_endings(self):
+        # o Codex grava a última mensagem num arquivo e o Claude devolve o texto no JSON: o fim de linha do Windows chega
+        # nos dois caminhos reais, não só no dublê
+        st = cerebro.load(); st['ativo'] = 'codex'; cerebro.save(st)
+        def codex(cmd, **kw):
+            Path(cmd[cmd.index('-o') + 1]).write_bytes('[[limpo]]\r\nBom dia.\r\nPode confirmar?\r\n'.encode('utf-8'))
+            return subprocess.CompletedProcess(cmd, 0, '', '')
+        with patch.object(cerebro, 'activity_run', side_effect=codex), patch.object(cerebro, 'codex_command', return_value=['codex']):
+            textos = [a[1] for a in cerebro.responder(self.msg('oi')) if a[0] == 'texto']
+        self.assertEqual(len(textos), 1); self.assertTrue(textos[0].startswith('Bom dia.')); self.assertNotIn('[[limpo]]', textos[0]); self.assertNotIn('🧠', textos[0])
+        st = cerebro.load(); st['ativo'] = 'claude'; cerebro.save(st)
+        saida = json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': '[[limpo]]\r\nBom dia.\r\nPode confirmar?', 'session_id': 's', 'modelUsage': {'claude-opus-5-5': {}}})
+        with patch.object(cerebro, '_run_stdin', return_value=subprocess.CompletedProcess([], 0, saida, '')):
+            textos = [a[1] for a in cerebro.responder(self.msg('oi')) if a[0] == 'texto']
+        self.assertEqual(textos, ['Bom dia.\r\nPode confirmar?'])
+
+    def test_agent_instructions_teach_the_clean_marker_and_that_only_telegram_signs(self):
+        # as instruções do 7D (as mesmas do 7A, em outras palavras): texto pra copiar e mandar começa com [[limpo]]; a
+        # assinatura é só do Telegram, e-mail e qualquer outro canal nunca levam
+        for motor in ('claude', 'codex'):
+            t = cerebro.instrucoes(motor)
+            self.assertIn('[[limpo]]', t); self.assertIn('e-mail', t); self.assertIn('Não assine', t)
 
     def test_claude_motor_error_result_is_failure(self):
         def fake_run(cmd, prompt):
@@ -276,8 +342,25 @@ class JanelaTests(unittest.TestCase):
         janela.receber({'update_id': 1, 'message': {'message_id': 2, 'chat': {'id': 555}, 'text': 'oi'}})
         with patch.object(cerebro, 'FAKE_CLAUDE', 'resposta'):
             Queue(janela.STATE).drain(janela.executar, janela.recuperado)
-        self.assertEqual(Queue(janela.STATE).status('555:2'), 'completed'); self.assertIn('🟣', self.sent()[-1])
+        self.assertEqual(Queue(janela.STATE).status('555:2'), 'completed'); self.assertIn('🧠 Claude', self.sent()[-1]); self.assertNotIn('🟣', self.sent()[-1])
         with Queue(janela.STATE).connect() as db: self.assertGreaterEqual(db.execute('SELECT COUNT(*) FROM receipts').fetchone()[0], 1)
+
+    def test_clean_marker_reaches_the_phone_without_marker_or_signature(self):
+        # 21/10/26: o mesmo [[limpo]] do 7A, pela janela da Dupla. Só a marca não manda nada (nem "(sem texto)").
+        casos = [('[[limpo]]\r\nBom dia, síndico.\r\nPode confirmar?', 'Bom dia, síndico.\r\nPode confirmar?'), ('resposta comum', None)]
+        for i, (resposta, enviado) in enumerate(casos):
+            janela.receber({'update_id': 10 + i, 'message': {'message_id': 20 + i, 'chat': {'id': 555}, 'text': 'escreve'}})
+            with patch.object(cerebro, 'FAKE_CLAUDE', resposta):
+                Queue(janela.STATE).drain(janela.executar, janela.recuperado)
+            self.assertEqual(Queue(janela.STATE).status(f'555:{20 + i}'), 'completed')
+            if enviado: self.assertEqual(self.sent()[-1], enviado)
+            else: self.assertTrue(self.sent()[-1].startswith('resposta comum\n\n🧠 Claude'), self.sent()[-1])
+        antes = len(self.sent())
+        janela.receber({'update_id': 30, 'message': {'message_id': 40, 'chat': {'id': 555}, 'text': 'de novo'}})
+        with patch.object(cerebro, 'FAKE_CLAUDE', '[[limpo]]'):
+            Queue(janela.STATE).drain(janela.executar, janela.recuperado)
+        self.assertEqual(len(self.sent()), antes)   # nada enviado: nem "(sem texto)", nem o aviso de motor interrompido
+        self.assertIn(Queue(janela.STATE).status('555:40'), ('completed', 'uncertain'))
 
     def test_unconfirmed_send_marks_uncertain(self):
         janela.receber({'update_id': 1, 'message': {'message_id': 3, 'chat': {'id': 555}, 'text': 'oi'}})
@@ -572,14 +655,14 @@ class PluginRemedioTests(unittest.TestCase):
         r = _bun(self.root, "import { readFileSync, writeFileSync } from 'fs'\nimport { join } from 'path'\n"
                  f"const STATE_DIR = {json.dumps(str(state))}\n" + _remedio().ASSINATURA_BLOCO +
                  "const out: any = { sem: mestreosAssina('oi') }\n"
-                 "writeFileSync(join(STATE_DIR, 'assinatura'), '🟣 Claude · Opus 5.5 · alto\\n')\n"
+                 "writeFileSync(join(STATE_DIR, 'assinatura'), '🧠 Claude · Opus 5.5 · high\\n')\n"
                  "out.com = mestreosAssina('oi'); out.limpo = mestreosAssina('  [[limpo]]  Texto pra outra pessoa')\n"
                  "out.md = mestreosAssina('*oi*', 'MarkdownV2')\n"
                  "out.vazio = mestreosAssina(''); console.log(JSON.stringify(out))\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         out = json.loads(r.stdout.strip().splitlines()[-1])
-        self.assertEqual(out['sem'], 'oi'); self.assertEqual(out['com'], 'oi\n\n🟣 Claude · Opus 5.5 · alto')
-        self.assertEqual(out['md'], '*oi*\n\n🟣 Claude · Opus 5\\.5 · alto')  # o ponto é reservado no MarkdownV2
+        self.assertEqual(out['sem'], 'oi'); self.assertEqual(out['com'], 'oi\n\n🧠 Claude · Opus 5.5 · high')
+        self.assertEqual(out['md'], '*oi*\n\n🧠 Claude · Opus 5\\.5 · high')  # o ponto é reservado no MarkdownV2
         self.assertEqual(out['limpo'], 'Texto pra outra pessoa'); self.assertEqual(out['vazio'], '')
 
     @unittest.skipUnless(__import__('shutil').which('bun'), 'sem bun nesta máquina (o plugin do Claude roda em bun; teste de comportamento pulado)')
@@ -832,20 +915,20 @@ class TurnoJanelaDoBotTests(unittest.TestCase):
                                                 _resposta('claude-opus-5-5', -20), _esforco('high')]))
         self.assertEqual((r.returncode, r.stdout), (0, ''))  # sem a tag do Telegram, nada entra no contexto
         self.assertGreaterEqual(int((self.state / 'turn-start').read_text().strip()), antes)
-        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5 · alto')  # a última vale
+        self.assertEqual(self.assinatura(), '🧠 Claude · Opus 5.5 · high')  # a última vale
 
     def test_model_written_in_a_tool_input_does_not_fool_the_signature(self):
         # a assinatura lê o campo da resposta, nunca o texto: o agente pode estar escrevendo código que cita outro modelo
         self.roda('inicio', self.conversa([_resposta('claude-opus-5-5', -10, 'Write', {'content': '"model": "claude-haiku-5-5"'})]))
-        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5')
+        self.assertEqual(self.assinatura(), '🧠 Claude · Opus 5.5')
 
     def test_effort_seen_mid_turn_wins_next_turn(self):
         # o esforço só aparece no meio do turno (CLAUDE_EFFORT na ferramenta, campo effort no Stop): fica pro próximo início
         entrada = self.conversa([_resposta('claude-opus-5-5'), _esforco('medium')])
         self.roda('ferramenta', '{}', CLAUDE_EFFORT='max'); self.roda('inicio', entrada)
-        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5 · máximo')
+        self.assertEqual(self.assinatura(), '🧠 Claude · Opus 5.5 · max')
         self.roda('fim', json.dumps({'effort': {'level': 'low'}})); self.roda('inicio', entrada)
-        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5 · baixo')
+        self.assertEqual(self.assinatura(), '🧠 Claude · Opus 5.5 · low')
 
     def test_tool_and_end_only_mark(self):
         self.assertEqual(self.roda('ferramenta').returncode, 0); self.assertEqual(self.roda('fim').returncode, 0)
@@ -869,12 +952,33 @@ class TurnoJanelaDoBotTests(unittest.TestCase):
         self.assertEqual(self.roda('qualquer').returncode, 0); self.assertFalse(self.state.exists())
 
     def test_names_and_effort_labels(self):
-        casos = [('claude-fable-5-1', 'xhigh', '🟣 Claude · Fable 5.1 · altíssimo'), ('claude-haiku-5-5', 'low', '🟣 Claude · Haiku 5.5 · baixo'),
-                 ('claude-opus-5', 'max', '🟣 Claude · Opus 5 · máximo'), ('claude-sonnet-5-5', None, '🟣 Claude · Sonnet 5.5'),
-                 ('claude-sonnet-4-20250514', None, '🟣 Claude · Sonnet 4'), ('claude-opus-5-5[1m]', 'high', '🟣 Claude · Opus 5.5 · alto')]
+        casos = [('claude-fable-5-1', 'xhigh', '🧠 Claude · Fable 5.1 · xhigh'), ('claude-haiku-5-5', 'low', '🧠 Claude · Haiku 5.5 · low'),
+                 ('claude-opus-5', 'max', '🧠 Claude · Opus 5 · max'), ('claude-sonnet-5-5', None, '🧠 Claude · Sonnet 5.5'),
+                 ('claude-sonnet-4-20250514', None, '🧠 Claude · Sonnet 4'), ('claude-opus-5-5[1m]', 'high', '🧠 Claude · Opus 5.5 · high')]
         for modelo, esforco, esperado in casos:
             self.roda('inicio', self.conversa([_resposta(modelo)] + ([_esforco(esforco)] if esforco else [])))
             self.assertEqual(self.assinatura(), esperado, modelo)
+
+    def test_signature_carries_the_official_effort_id_never_a_translation(self):
+        # 21/10/26: a assinatura dizia "máximo", nome que nenhuma provedora usa. Sai o id do claude --effort, sem
+        # tradução (low, medium, high, xhigh, max), venha o esforço da conversa, da ferramenta (CLAUDE_EFFORT) ou do Stop.
+        sem = self.conversa([_resposta('claude-opus-5-5')])
+        marca = self.state / 'esforco.json'   # o esforço visto no meio do turno vale mais que o da conversa: começa limpo
+        for nivel in ('low', 'medium', 'high', 'xhigh', 'max'):
+            esperado = f'🧠 Claude · Opus 5.5 · {nivel}'
+            marca.unlink(missing_ok=True)
+            self.roda('inicio', self.conversa([_resposta('claude-opus-5-5'), _esforco(nivel)]))      # registrado na conversa
+            self.assertEqual(self.assinatura(), esperado, nivel)
+            outro = 'low' if nivel != 'low' else 'max'
+            self.roda('ferramenta', '{}', CLAUDE_EFFORT=outro); self.roda('inicio', sem)
+            self.assertEqual(self.assinatura(), f'🧠 Claude · Opus 5.5 · {outro}', outro)             # visto no meio do turno
+            self.roda('fim', json.dumps({'effort': {'level': nivel}})); self.roda('inicio', sem)       # campo do Stop
+            self.assertEqual(self.assinatura(), esperado, nivel)
+            self.assertIsNone(re.search(r'\b(baixo|médio|alto|altíssimo|máximo)\b', self.assinatura()), nivel)
+        # id que não é nível (ultracode é interruptor, não nível): a assinatura fica só com o modelo, sem inventar nome
+        marca.unlink(missing_ok=True)
+        self.roda('ferramenta', '{}', CLAUDE_EFFORT='ultracode'); self.roda('inicio', self.conversa([_resposta('claude-opus-5-5'), _esforco('ultracode')]))
+        self.assertEqual(self.assinatura(), '🧠 Claude · Opus 5.5')
 
     def test_default_folder_follows_claude_config_dir(self):
         cfg = self.root / 'cfg'
@@ -886,12 +990,16 @@ class TurnoJanelaDoBotTests(unittest.TestCase):
         # 20/10/26: só a regra escrita não fazia o agente trocar a reação; o lembrete vai em toda mensagem do Telegram.
         # PYTHONIOENCODING=cp1252 imita o console do Windows: caminho com acento e emoji não podem derrubar nada
         tag = '<channel source="plugin:telegram:telegram" chat_id="42" message_id="9" user="aluno" ts="x">oi</channel>'
-        entrada = self.conversa([_resposta('claude-opus-5-5')], nome='conversa-ação-🟣.jsonl', prompt=tag)
+        entrada = self.conversa([_resposta('claude-opus-5-5')], nome='conversa-ação-🧠.jsonl', prompt=tag)
         r = self.roda('inicio', entrada, PYTHONIOENCODING='cp1252')
         self.assertEqual(r.returncode, 0)
         self.assertIn('[Telegram] Responda SEMPRE pela ferramenta reply', r.stdout); self.assertIn('✍', r.stdout)
-        self.assertEqual(self.assinatura(), '🟣 Claude · Opus 5.5')
+        self.assertEqual(self.assinatura(), '🧠 Claude · Opus 5.5')
         self.assertNotIn('telegram-bot-troca.py', r.stdout)  # "oi" não fala de modelo: sem a dica da troca
+        # 21/10/26: texto pra copiar vai sozinho no balão com [[limpo]]; a assinatura do modelo é só do Telegram
+        self.assertIn('[[limpo]]', r.stdout); self.assertIn('sozinho', r.stdout); self.assertIn('e-mail', r.stdout)
+        manual = (SCRIPTS / 'telegram-janela-do-bot.md').read_text(encoding='utf-8')
+        self.assertIn('[[limpo]]', manual); self.assertIn('e-mail', manual); self.assertNotIn('🟣', manual)
         self.assertEqual(self.roda('inicio', self.conversa([], prompt='pergunta digitada na janela')).stdout, '')
 
     def test_switch_hint_with_the_exact_command_only_when_it_matters(self):
@@ -1002,18 +1110,69 @@ class TrocaDeModeloTests(unittest.TestCase):
         # a janela reabre (processo novo, MESMA conversa): a assinatura já sai com o modelo pedido
         self.gancho('sessao', pid='5151')
         self.assertEqual(self.estado()['estado'], 'voltou')
-        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Sonnet')
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🧠 Claude · Sonnet')
         self.escreve({'type': 'user', 'timestamp': _quando(), 'message': {'role': 'user', 'content': 'MESTREOS_TROCA_CONCLUIDA_42'}})
         aviso = self.gancho('inicio', pid='5151', prompt='MESTREOS_TROCA_CONCLUIDA_42')
         self.assertIn('chat_id 42', aviso); self.assertIn('✅ Pronto, agora estou no Sonnet · esforço padrão.', aviso)
-        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Sonnet')  # a conversa só tem o Opus
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🧠 Claude · Sonnet')  # a conversa só tem o Opus
         self.assertEqual(json.loads(self.gancho('fim', pid='5151'))['decision'], 'block')  # voltou sem avisar: segura
         self.assertEqual(self.estado()['estado'], 'voltou')   # o turno continua: ainda não deu certo
         self.escreve(_resposta('claude-sonnet-5-5', 1, 'mcp__plugin_telegram_telegram__reply'), _esforco('medium'))
         self.assertEqual(self.gancho('fim', pid='5151', stop_hook_active=True), '')
         self.assertEqual(self.estado()['estado'], 'ok')
         self.gancho('inicio', pid='5151', prompt='oi')
-        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Sonnet 5.5 · médio')  # 1ª resposta nova
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🧠 Claude · Sonnet 5.5 · medium')  # 1ª resposta nova
+
+    def test_every_message_shows_the_official_effort_id(self):
+        # 21/10/26: "máximo" não é nome de nível de nenhuma provedora. O que o aluno lê usa o id do claude --effort
+        # (low, medium, high, xhigh, max); o que vai pros arquivos e pro `claude --effort` continua sendo o id.
+        self.bot.mkdir(); (self.bot / 'opcoes').write_text('--model opus --effort high\n', encoding='ascii')
+        self.janela(_resposta('claude-opus-5-5', -120), _esforco('high'), _do_dono('esforço máximo', -5))
+        self.assertEqual(self.troca('status')[1].splitlines()[0], 'opções da janela: Opus · esforço high')
+        rc, out = self.troca('trocar', '--pedido', 'esforço máximo')   # o aluno fala português: entendido
+        self.assertEqual(rc, 0, out)
+        self.assertIn('de Opus · esforço high para Opus · esforço max.', out)
+        self.assertIn('⏳ Trocando pra Opus · esforço max.', out)
+        self.assertEqual(self.arquivo('opcoes'), '--model opus --effort max')   # o arquivo guarda o id, não o nome mostrado
+        self.assertEqual(self.troca('status')[1].splitlines()[0], 'opções da janela: Opus · esforço max')
+        self.assertIsNone(re.search(r'\b(baixo|médio|alto|altíssimo|máximo)\b', out))
+        # a janela fecha, reabre na mesma conversa e o aviso e a assinatura saem com o mesmo nome
+        self.state.mkdir(exist_ok=True)
+        (self.state / 'turn-start').write_text(str(int(time.time() * 1000) - 5000))
+        (self.state / 'turn-end').write_text(str(int(time.time() * 1000) + 10))
+        self.assertEqual(self.troca('derrubar', '4242', str(int(time.time() * 1000) - 1000))[0], 0)
+        self.gancho('sessao', pid='5151')
+        self.escreve({'type': 'user', 'timestamp': _quando(), 'message': {'role': 'user', 'content': 'MESTREOS_TROCA_CONCLUIDA_42'}})
+        aviso = self.gancho('inicio', pid='5151', prompt='MESTREOS_TROCA_CONCLUIDA_42')
+        self.assertIn('✅ Pronto, agora estou no Opus · esforço max.', aviso)
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🧠 Claude · Opus · max')
+        self.assertIsNone(re.search(r'\b(baixo|médio|alto|altíssimo|máximo)\b', aviso))
+
+    def test_confirmation_and_the_list_of_options_use_official_ids(self):
+        self.janela(_do_dono('', -5, audio=True))
+        rc, out = self.troca('trocar', '--pedido', 'esforço médio', '--esforco', 'esforço médio')   # áudio: sempre confirma
+        self.assertEqual(rc, 3, out)
+        self.assertIn('Entendi: trocar pra modelo padrão da conta · esforço medium. Confirma?', out)
+        rc, out = self.troca('trocar', '--pedido', 'bom dia')   # nem modelo nem esforço: o agente repete a lista ao dono
+        self.assertEqual(rc, 2, out)
+        self.assertIn('esforço (low, medium, high, xhigh, max ou padrão)', out)
+        self.assertIsNone(re.search(r'\b(baixo|médio|alto|altíssimo|máximo)\b', out))
+
+    def test_portuguese_words_are_still_understood_and_shown_as_official_ids(self):
+        for fala, nivel in (('baixo', 'low'), ('médio', 'medium'), ('alto', 'high'), ('altíssimo', 'xhigh'), ('muito alto', 'xhigh'),
+                            ('máximo', 'max'), ('low', 'low'), ('medium', 'medium'), ('high', 'high'), ('xhigh', 'xhigh'), ('max', 'max')):
+            rc, out = self.troca('entender', 'muda o esforço pra ' + fala)
+            self.assertEqual((rc, out.strip()), (0, f'CLARA: modelo padrão da conta · esforço {nivel}'), fala)
+
+    def test_shortcut_never_hands_a_translated_effort_to_claude(self):
+        # a troca de nome é só de exibição: o que o meubot passa ao `claude --effort` é o id oficial, e só ele
+        self.bot.mkdir()
+        for nivel in ('low', 'medium', 'high', 'xhigh', 'max'):
+            (self.bot / 'opcoes').write_text(f'--model opus --effort {nivel}\n', encoding='ascii')
+            self.assertEqual(self.troca('atalho', '--inicio')[1].strip(), f'--model opus --effort {nivel}', nivel)
+        for traduzido in ('baixo', 'medio', 'alto', 'altissimo', 'maximo'):
+            (self.bot / 'opcoes').write_text(f'--model opus --effort {traduzido}\n', encoding='ascii')
+            self.assertEqual(self.troca('atalho', '--inicio')[1].strip(), '', traduzido)
 
     def test_one_message_is_worth_one_switch(self):
         self.janela(_do_dono('troca pro sonnet', -5))
@@ -1141,9 +1300,10 @@ class TrocaDeModeloTests(unittest.TestCase):
         self.assertEqual(self.arquivo('retomar'), f'--resume {SID} MESTREOS_TROCA_FALHOU_42')
         self.gancho('sessao', pid='6161')
         self.assertEqual(self.estado()['estado'], 'voltou-antes')
-        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🟣 Claude · Opus · alto')
+        self.assertEqual((self.state / 'assinatura').read_text(encoding='utf-8').strip(), '🧠 Claude · Opus · high')
         aviso = self.gancho('inicio', pid='6161', prompt='MESTREOS_TROCA_FALHOU_42')
         self.assertIn('⚠️ Não consegui trocar pra Fable', aviso); self.assertIn('invalid_request', aviso)
+        self.assertIn('Continuo no Opus · esforço high.', aviso)   # 21/10/26: nome oficial do nível, sem tradução
         (self.bot / 'retomar').unlink()   # o meubot já leu
         self.gancho('falha', pid='6161', error='rate_limit')  # nem o de antes respondeu: para de reabrir
         self.assertTrue(self.espera_estado('falhou'), self.estado()); self.assertIsNone(self.arquivo('retomar'))

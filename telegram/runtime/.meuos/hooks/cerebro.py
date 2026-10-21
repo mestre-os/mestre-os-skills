@@ -49,7 +49,7 @@ TIMEOUT = int(os.environ.get("MESTREOS_CEREBRO_TIMEOUT", "900"))   # por INATIVI
 IMG = (".png", ".jpg", ".jpeg", ".webp", ".gif"); AUD = (".oga", ".ogg", ".mp3", ".m4a", ".wav", ".opus")
 MODELOS_CODEX = {"sol": "gpt-5.6-sol", "terra": "gpt-5.6-terra", "luna": "gpt-5.6-luna", "astra": "gpt-6-astra"}
 MODELOS_CLAUDE = {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku", "fable": "fable"}
-EMOJI = {"sol": "☀️", "terra": "🌍", "luna": "🌙", "astra": "✨", "claude": "🟣"}
+CEREBRO = "🧠"   # emoji único de toda assinatura de modelo, Claude ou OpenAI (pedido do dono, 21/10/2026)
 # ferramentas que o Claude pode usar sozinho pelo Telegram (mesmo espírito do sandbox do Codex: ler e escrever no OS e na memória,
 # sem terminal). O dono pode ampliar com MESTREOS_CLAUDE_TOOLS="Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Bash(python3 *)".
 TOOLS_CLAUDE = [t.strip() for t in os.environ.get("MESTREOS_CLAUDE_TOOLS", "Read,Edit,Write,Glob,Grep,WebFetch,WebSearch").split(",") if t.strip()]
@@ -102,9 +102,8 @@ def nome_modelo(motor, modelo):
     return f"{m.group(1).capitalize()}{(' ' + v) if v else ''}"
 
 def assinatura(motor, modelo=None):
-    if motor == "codex":
-        m = re.search(r"-(sol|terra|luna|astra)\b", modelo or ""); return f"{EMOJI.get(m.group(1), '🟢') if m else '🟢'} {nome_modelo('codex', modelo)}"
-    return f"🟣 Claude · {nome_modelo('claude', modelo)}" if modelo else "🟣 Claude"
+    if motor == "codex": return f"{CEREBRO} {nome_modelo('codex', modelo)}"
+    return f"{CEREBRO} Claude · {nome_modelo('claude', modelo)}" if modelo else f"{CEREBRO} Claude"
 
 def status_txt(st):
     outro = st.get("secundario")
@@ -139,7 +138,10 @@ def instrucoes(motor):
     return (f"[Modo Telegram · janela do MestreOS. Você é o agente do dono deste OS (mesma personalidade, regras e skills de sempre; "
             f"{'leia AGENTS.md desta pasta' if motor == 'codex' else 'seu claude.md e soul.md já estão carregados'}). "
             f"A mensagem abaixo chegou pelo Telegram dele. Responda em português, curto, texto puro (sem markdown pesado): o que você "
-            f"escrever como resposta final é o que ele vai receber no celular. Não assine. Memória do agente: {MEMDIR} (leia MEMORY.md e só os "
+            f"escrever como resposta final é o que ele vai receber no celular. Não assine: a janela põe a assinatura do modelo no fim. "
+            f"Texto pra ele copiar e mandar a outra pessoa: a resposta inteira é só esse texto e começa com [[limpo]] (a marca some e a "
+            f"assinatura não entra); comentário seu sobre o texto, só se ele pedir, em outra resposta. A assinatura do modelo é só do "
+            f"Telegram: e-mail e qualquer outro canal nunca levam. Memória do agente: {MEMDIR} (leia MEMORY.md e só os "
             f"arquivos que a pergunta pedir; grave feedback/decisão lá também). Arquivo que você quiser mandar pro celular: salve em {out_dir}/ "
             f"(tudo que aparecer lá eu envio). Skill `salvar` e os outros ritos do OS valem aqui igual. Você NÃO consegue trocar de cérebro: "
             f"se ele pedir, responda só: 'pra trocar, manda: troca pro Codex' (ou 'volta pro Claude'). Seja rápido: não varra pastas nem skills "
@@ -434,6 +436,7 @@ def trocar(st, motor, modelo, resumo=True):
 # ---------- entrada da janela ----------
 REACOES_OK = {"❤", "🔥", "🙏", "👍", "🤝", "😁", "🎉", "👌", "💯", "🫡", "🤔", "😢", "🤣", "😍", "👏"}
 RE_REAGIR = re.compile(r"^\s*\[reagir:\s*([^\]\s]{1,4})\s*\]\s*")
+RE_LIMPO = re.compile(r"^\s*\[\[limpo\]\]\s*")   # texto pra ele copiar e mandar a outra pessoa: a mesma marca do 7A
 
 def responder(msg, batimento=None):
     """msg = {"chat","mid","user","ts","texto","imagens":[...],"audios":[...],"transcricoes":[...],"arquivos":[...]}
@@ -492,9 +495,16 @@ def responder(msg, batimento=None):
     log(f"respondido por {motor} ({st[motor].get('modelo')}) em {time.time() - t0:.0f}s ({len(msg.get('imagens') or [])} img, {len(transc)} áudio, {len(novos)} arquivos)")
     reacao = RE_REAGIR.match(resp or "")
     if reacao: resp = resp[reacao.end():].lstrip()
+    limpo = RE_LIMPO.match(resp or "")
+    if limpo:   # [[limpo]]: a marca some e a assinatura não entra; a marca também pode vir antes da reação
+        resp = resp[limpo.end():]
+        if not reacao:
+            reacao = RE_REAGIR.match(resp)
+            if reacao: resp = resp[reacao.end():].lstrip()
     emoji = reacao.group(1).replace("\ufe0f", "") if reacao else ""  # "❤️" do modelo → "❤" que o Telegram aceita
     acoes = antes_acoes + ([("reagir", emoji)] if emoji in REACOES_OK else [])
-    acoes += [("texto", resp + "\n\n" + assinatura(motor, st[motor].get("modelo")))]
+    if not limpo: acoes += [("texto", resp + "\n\n" + assinatura(motor, st[motor].get("modelo")))]
+    elif resp.strip(): acoes += [("texto", resp.strip())]   # só a marca: nada pra enviar
     acoes += [("arquivo", a) for a in novos]
     return acoes
 
@@ -522,11 +532,11 @@ def teste():
         else: fail += 1; print("❌", nome)
     def txt(r): return "".join(a[1] for a in r.get("acoes", []) if a[0] == "texto")
     subprocess.run([sys.executable, me, "--motores", "claude", "codex"], capture_output=True, env=dict(os.environ))
-    r = run("oi tudo bem", fake_claude="tudo ótimo");                          chk("1 principal Claude responde e assina 🟣", "tudo ótimo" in txt(r) and "🟣" in txt(r) and st()["ativo"] == "claude")
+    r = run("oi tudo bem", fake_claude="tudo ótimo");                          chk("1 principal Claude responde e assina 🧠", "tudo ótimo" in txt(r) and "🧠 Claude" in txt(r) and "🟣" not in txt(r) and st()["ativo"] == "claude")
     if "tudo ótimo" not in txt(r): print("   detalhe:", json.dumps(r, ensure_ascii=False)[:600])
     r = run("qual cérebro tá ligado?");                                          chk("2 status sem chamar motor", "Cérebro ligado" in txt(r) and "Claude" in txt(r))
     r = run("troca pro codex", fake_claude="resumo do claude");                  chk("3 'troca pro codex' = Sol; resumo do Claude fica pendente", st()["ativo"] == "codex" and st()["codex"]["modelo"] == "gpt-5.6-sol" and (st().get("resumo_pendente") or {}).get("para") == "codex")
-    r = run("qual é a capital de Minas?", fake_codex="BH");                      chk("4 Codex responde com assinatura ☀️ e limpa o resumo pendente", "BH" in txt(r) and "Sol" in txt(r) and not st().get("resumo_pendente"))
+    r = run("qual é a capital de Minas?", fake_codex="BH");                      chk("4 Codex responde com assinatura 🧠 Sol e limpa o resumo pendente", "BH" in txt(r) and "🧠 Sol" in txt(r) and "☀" not in txt(r) and not st().get("resumo_pendente"))
     r = run("salvar", fake_codex="salvo");                                       chk("5 'salvar' vai pro cérebro ativo (Codex)", "salvo" in txt(r))
     r = run("liga o astra", fake_codex="x");                                     chk("6 Sol → Astra (thread nova, mesmo motor)", st()["codex"]["modelo"] == "gpt-6-astra" and st()["ativo"] == "codex" and st()["codex"]["thread"] is None)
     r = run("e agora?", fake_codex="astra na área");                             chk("6b Astra responde e abre thread", "astra na área" in txt(r) and st()["codex"]["thread"])
@@ -584,6 +594,23 @@ def teste():
     chk("27 linha do Remote Control ('login expired, run /login') não vira 'perdeu o login'; login perdido de verdade continua",
         causa_conhecida("Remote Control disconnected — Claude.ai login expired — run /login\nError: connect ECONNREFUSED") is None
         and causa_conhecida("Error: Not logged in · Please run /login") == ("login", ""))
+    # 21/10/2026: toda assinatura de modelo começa com 🧠 (Claude ou OpenAI); [[limpo]] = texto pra ele copiar e mandar a outra
+    # pessoa: sai sem a marca e sem assinatura (mesma marca do 7A)
+    subprocess.run([sys.executable, me, "--motores", "claude", "codex"], capture_output=True, env=dict(os.environ))
+    chk("28 assinatura: 🧠 em todo cérebro (Claude e OpenAI), sem o roxo, sem o emoji do modelo e sem o verde",
+        assinatura("claude", "opus") == "🧠 Claude · Opus" and assinatura("claude") == "🧠 Claude"
+        and [assinatura("codex", "gpt-5.6-" + m) for m in ("sol", "terra", "luna")] == ["🧠 Sol", "🧠 Terra", "🧠 Luna"]
+        and assinatura("codex", "gpt-6-astra") == "🧠 Astra" and assinatura("codex", "modelo-novo") == "🧠 modelo-novo"
+        and not any(e in assinatura(m, x) for e in ("🟣", "☀", "🌍", "🌙", "✨", "🟢") for m, x in (("claude", "opus"), ("codex", "gpt-5.6-sol"), ("codex", None))))
+    r = run("escreve um recado pro síndico", fake_claude="[[limpo]]\nBom dia, síndico. Pode confirmar a reunião de quinta?")
+    chk("29 [[limpo]]: a marca some e a assinatura não entra", txt(r) == "Bom dia, síndico. Pode confirmar a reunião de quinta?")
+    r = run("e agora?", fake_claude="resposta comum")
+    chk("30 sem a marca a assinatura continua", txt(r).startswith("resposta comum\n\n🧠 Claude"))
+    r = run("de novo", fake_claude="[[limpo]]")
+    chk("31 só a marca: nada pra enviar e sem erro", "erro" not in r and not any(a[0] == "texto" for a in r.get("acoes", [])))
+    r = run("combinado", fake_claude="[reagir:🤝] [[limpo]]\r\nLinha 1\r\nLinha 2\r\n")
+    chk("32 reação + [[limpo]] com fim de linha do Windows: reage, texto limpo, sem assinatura",
+        ["reagir", "🤝"] in r.get("acoes", []) and txt(r) == "Linha 1\r\nLinha 2")
     # aluno só-Codex: principal codex, sem secundário
     subprocess.run([sys.executable, me, "--motores", "codex", "-"], capture_output=True, env=dict(os.environ))
     r = run("oi", fake_codex="opa", principal="codex", secundario=None);          chk("15 aluno só-Codex: Codex é o principal e responde", "opa" in txt(r) and st()["ativo"] == "codex")

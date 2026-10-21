@@ -49,7 +49,10 @@ ESFORCOS = {"baixo": "low", "baixa": "low", "low": "low", "medio": "medium", "me
             "alto": "high", "alta": "high", "high": "high", "altissimo": "xhigh", "altissima": "xhigh", "xhigh": "xhigh",
             "maximo": "max", "maxima": "max", "max": "max"}
 ESFORCOS_2 = {"muito alto": "xhigh", "extra alto": "xhigh"}
-NOME_ESFORCO = {"low": "baixo", "medium": "médio", "high": "alto", "xhigh": "altíssimo", "max": "máximo"}
+# Esforço pelo nome oficial, sem tradução (21/10/2026): o id do `claude --effort`. As chaves são os ids e também a lista dos
+# níveis válidos nos pares --effort (tokens_de_opcoes, grava_opcoes); o valor é só o que o aluno lê. O que ele FALA continua
+# em ESFORCOS (baixo, médio, alto, altíssimo, máximo e os próprios ids).
+NOME_ESFORCO = {nivel: nivel for nivel in ("low", "medium", "high", "xhigh", "max")}
 PADRAO = {"padrao", "default", "original"}
 MODELO_PADRAO = "padrao"   # sentinela: "modelo padrão" é recusado (a conversa retomada restaura o modelo dela)
 VERBOS = {"troca", "trocar", "troque", "muda", "mudar", "mude", "passa", "passar", "passe", "volta", "voltar", "volte",
@@ -462,7 +465,7 @@ def cmd_trocar(pedido, modelo_ia="", esforco_ia=""):
         return 2
     if not mud:
         print("RECUSADO: não achei modelo nem esforço nesse pedido. Nada mudou. Pergunte ao dono qual modelo (Fable, "
-              "Opus, Sonnet, Haiku) ou esforço (baixo, médio, alto, altíssimo, máximo, padrão) ele quer.")
+              "Opus, Sonnet, Haiku) ou esforço (low, medium, high, xhigh, max ou padrão) ele quer.")
         return 2
     alvo = aplica(atual, mud)
     if alvo == atual:

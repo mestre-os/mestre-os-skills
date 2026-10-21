@@ -619,13 +619,13 @@ def teste():
     with q.connect() as db: n = db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
     chk("5 update repetido não duplica o pedido", n == 1)
     q.drain(executar, recuperado)
-    chk("6 executor entrega a resposta do Claude com assinatura e recibo", q.status("555:13") == "completed" and "resposta do claude" in enviados()[-1] and "🟣" in enviados()[-1])
+    chk("6 executor entrega a resposta do Claude com assinatura 🧠 e recibo", q.status("555:13") == "completed" and "resposta do claude" in enviados()[-1] and "🧠 Claude" in enviados()[-1] and "🟣" not in enviados()[-1])
     with q.connect() as db: rec = db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0]
     chk("6b recibo gravado com o message_id do Telegram", rec >= 1)
     # 7 troca de cérebro pela janela
     receber({"update_id": 5, "message": {"message_id": 14, "chat": {"id": 555}, "text": "troca pro codex"}}); q.drain(executar, recuperado)
     receber({"update_id": 6, "message": {"message_id": 15, "chat": {"id": 555}, "text": "e aí"}}); q.drain(executar, recuperado)
-    chk("7 'troca pro codex' pela janela: Codex responde a próxima com ☀️", "resposta do codex" in enviados()[-1] and "Sol" in enviados()[-1])
+    chk("7 'troca pro codex' pela janela: Codex responde a próxima com 🧠 Sol", "resposta do codex" in enviados()[-1] and "🧠 Sol" in enviados()[-1] and "☀" not in enviados()[-1])
     # 8 áudio sem transcrição
     receber({"update_id": 7, "message": {"message_id": 16, "chat": {"id": 555}, "voice": {"file_id": "abc"}}}); q.drain(executar, recuperado)
     chk("8 áudio sem provedor: aviso honesto 'manda em texto', pedido fechado sem chamar motor", "manda em texto" in enviados()[-1].lower() and q.status("555:16") == "completed")
@@ -777,6 +777,18 @@ def teste():
     chk("40 ao vivo andando só regrava a posição; estranho não mexe; edição de texto não vira pedido novo",
         salvo["lat"] == -19.94 and q.status("555:503") is None and texto_na_fila(301) == "oi de novo")
     q.drain(executar, recuperado)
+    # ---- 21/10/26: [[limpo]] pela janela = texto pra ele copiar e mandar a outra pessoa (sem a marca e sem a assinatura) ----
+    cerebro.FAKE_CLAUDE = "[[limpo]]\r\nBom dia, síndico.\r\nPode confirmar a reunião?"
+    receber({"update_id": 60, "message": {"message_id": 600, "chat": {"id": 555}, "text": "escreve o recado pro síndico"}}); q.drain(executar, recuperado)
+    chk("41 [[limpo]] pela janela: o balão sai sem a marca e sem assinatura (fim de linha do Windows incluído)",
+        q.status("555:600") == "completed" and enviados()[-1] == "Bom dia, síndico.\r\nPode confirmar a reunião?")
+    cerebro.FAKE_CLAUDE = "resposta comum"
+    receber({"update_id": 61, "message": {"message_id": 601, "chat": {"id": 555}, "text": "e agora?"}}); q.drain(executar, recuperado)
+    chk("42 sem a marca a assinatura segue: 🧠 Claude no fim", enviados()[-1].startswith("resposta comum\n\n🧠 Claude"))
+    n_antes = len(enviados()); cerebro.FAKE_CLAUDE = "[[limpo]]"
+    receber({"update_id": 62, "message": {"message_id": 602, "chat": {"id": 555}, "text": "manda de novo"}}); q.drain(executar, recuperado)
+    chk("43 só a marca: não manda nada (nem '(sem texto)' nem aviso de erro) e o pedido fecha",
+        len(enviados()) == n_antes and q.status("555:602") in ("completed", "uncertain"))
     print(f"----- {ok} ok · {fail} falhas"); return 0 if fail == 0 else 1
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ Quem fala comigo nesta janela está no celular, pelo Telegram. O que eu escrevo 
 - `MESTREOS_TROCA_CONCLUIDA_<número>` ou `MESTREOS_TROCA_FALHOU_<número>` como mensagem: a janela acabou de reabrir. O lembrete que chega junto diz o que mandar.
 
 ## Assinatura e texto pra outra pessoa
-- O plugin põe no fim de cada resposta o modelo e o esforço que eu usei ("🟣 Claude · Opus 5.5 · alto"). Eu não assino nada.
+- O plugin põe no fim de cada resposta o modelo e o esforço que eu usei ("🧠 Claude · Opus 5.5 · max"). Eu não assino nada. A assinatura é só do Telegram: e-mail ou qualquer outro canal nunca leva assinatura de modelo.
 - Texto pra ele copiar e mandar pra outra pessoa: o `text` do `reply` começa com `[[limpo]]`. A marca some e a assinatura não entra. A explicação vai em outra mensagem, antes; o balão do texto vai sozinho.
 
 ## Nunca
